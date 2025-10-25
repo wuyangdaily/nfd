@@ -137,7 +137,7 @@ async function handleGuestMessage(message){
   if(isblocked){
     return sendMessage({
       chat_id: chatId,
-      text:'您已被屏蔽'
+      text:'您已被屏蔽，无法发送消息！'
     })
   }
 
