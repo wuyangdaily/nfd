@@ -102,7 +102,7 @@ async function generateRecentChatButtons() {
     console.log(`UserInfo for chatId ${chatId}:`, userInfo); // 调试信息
     const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
     return {
-      text: `发给： ${nickname}`,
+      text: `发给： ${nickname} ${uid}`,
       callback_data: `select_${chatId}`
     };
   }));
