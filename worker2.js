@@ -385,7 +385,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /search UID'
+          text: '使用方法: /search 用户UID'
         });
       }
     } else if (message.text.startsWith('/fraud') && message.chat.id.toString() === ADMIN_UID) {
@@ -408,7 +408,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /fraud UID'
+          text: '使用方法: /fraud 用户UID'
         });
       }
     } else if (message.text.startsWith('/unfraud') && message.chat.id.toString() === ADMIN_UID) {
@@ -432,7 +432,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /unfraud UID'
+          text: '使用方法: /unfraud 用户UID'
         });
       }
     }
@@ -547,7 +547,7 @@ async function handleGuestMessage(message) {
   if (isblocked) {
     return sendMessage({
       chat_id: chatId,
-      text: '您已被屏蔽，无法发送消息！'
+      text: '您已被屏蔽'
     });
   }
 
