@@ -385,7 +385,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /search <用户UID>'
+          text: '使用方法: /search UID'
         });
       }
     } else if (message.text.startsWith('/fraud') && message.chat.id.toString() === ADMIN_UID) {
@@ -408,7 +408,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /fraud <用户UID>'
+          text: '使用方法: /fraud UID'
         });
       }
     } else if (message.text.startsWith('/unfraud') && message.chat.id.toString() === ADMIN_UID) {
@@ -432,7 +432,7 @@ async function onMessage(message) {
       } else {
         return sendMessage({
           chat_id: message.chat.id,
-          text: '使用方法: /unfraud <用户UID>'
+          text: '使用方法: /unfraud UID'
         });
       }
     }
