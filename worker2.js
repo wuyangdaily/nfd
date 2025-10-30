@@ -102,7 +102,7 @@ async function generateRecentChatButtons() {
     console.log(`UserInfo for chatId ${chatId}:`, userInfo); // 调试信息
     const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
     return {
-      text: `发给： ${nickname}`,
+      text: `发给：${nickname}`,
       callback_data: `select_${chatId}`
     };
   }));
@@ -165,7 +165,7 @@ async function setBotCommands() {
   const commands = [
     { command: 'start', description: '启动机器人会话' },
     { command: 'help', description: '显示帮助信息' },
-    { command: 'search', description: '查看指定uid用户最新昵称' },
+    { command: 'search', description: '查看指定uid用户最新昵称 (仅管理员)' },
     { command: 'block', description: '屏蔽用户 (仅管理员)' },
     { command: 'unblock', description: '解除屏蔽用户 (仅管理员)' },
     { command: 'checkblock', description: '检查用户是否被屏蔽 (仅管理员)' },
@@ -316,7 +316,7 @@ async function onMessage(message) {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
                     "/help - 显示此帮助信息\n" +
-                    "/search - 通过uid查询最新名字\n" + //查看指定uid最新用户名
+                    "/search - 通过uid查询最新名字 (仅管理员)\n" + //查看指定uid最新用户名
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
                     "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
