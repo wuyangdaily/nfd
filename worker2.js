@@ -409,11 +409,11 @@ async function onMessage(message) {
                     "/start - 启动机器人会话\n" +
                     "/help - 显示帮助信息\n" +
                     "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
-                    "/fraud - 添加骗子ID (仅管理员)\n" +
-                    "/unfraud - 移除骗子ID (仅管理员)\n" +
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
                     "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
+                    "/fraud - 添加骗子ID (仅管理员)\n" +
+                    "/unfraud - 移除骗子ID (仅管理员)\n" +
                     "/list - 查看本地骗子ID列表 (仅管理员)\n" +
                     "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n";
       return sendMessage({
