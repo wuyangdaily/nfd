@@ -407,7 +407,7 @@ async function onMessage(message) {
     } else if (command === '/help') {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
-                    "/help - 显示此帮助信息\n" +
+                    "/help - 显示帮助信息\n" +
                     "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
                     "/fraud - 添加骗子ID (仅管理员)\n" +
                     "/unfraud - 移除骗子ID (仅管理员)\n" +
