@@ -408,9 +408,9 @@ async function onMessage(message) {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
                     "/help - 显示此帮助信息\n" +
-                    "/search - 通过回复被转发的消息或 /search UID 查询用户昵称 (仅管理员)\n" +
-                    "/fraud - 回复被转发的消息或 /fraud UID 添加骗子ID (仅管理员)\n" +
-                    "/unfraud - 回复被转发的消息或 /unfraud UID 移除骗子ID (仅管理员)\n" +
+                    "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
+                    "/fraud - 添加骗子ID (仅管理员)\n" +
+                    "/unfraud - 移除骗子ID (仅管理员)\n" +
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
                     "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
@@ -487,7 +487,7 @@ async function onMessage(message) {
           return sendMessage({ chat_id: message.chat.id, text: `无法找到 UID: ${searchId} 的用户信息` });
         }
       } else {
-        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /search，或 /search <UID>' });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /search，或 /search 用户UID' });
       }
     } else if (command === '/fraud') {
       if (!(await requireAdmin(message))) return;
@@ -521,7 +521,7 @@ async function onMessage(message) {
           return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 已存在` });
         }
       } else {
-        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /fraud，或 /fraud <UID>' });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /fraud，或 /fraud 用户UID' });
       }
     } else if (command === '/unfraud') {
       if (!(await requireAdmin(message))) return;
@@ -557,7 +557,7 @@ async function onMessage(message) {
           return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 不在本地列表中` });
         }
       } else {
-        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /unfraud，或 /unfraud <UID>' });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID' });
       }
     }
   } // end if command
