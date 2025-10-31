@@ -408,15 +408,14 @@ async function onMessage(message) {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
                     "/help - 显示此帮助信息\n" +
-                    "/search - 通过uid查询最新名字 (仅管理员)\n" +
+                    "/search - 通过回复被转发的消息或 /search UID 查询用户昵称 (仅管理员)\n" +
+                    "/fraud - 回复被转发的消息或 /fraud UID 添加骗子ID (仅管理员)\n" +
+                    "/unfraud - 回复被转发的消息或 /unfraud UID 移除骗子ID (仅管理员)\n" +
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
                     "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
-                    "/fraud - 添加骗子ID (仅管理员)\n" +
-                    "/unfraud - 移除骗子ID (仅管理员)\n" +
                     "/list - 查看本地骗子ID列表 (仅管理员)\n" +
-                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n" +
-                    "更多指令将在后续更新中添加。";
+                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n";
       return sendMessage({
         chat_id: message.chat.id,
         text: helpMsg,
@@ -426,16 +425,13 @@ async function onMessage(message) {
       return listBlockedUsers();
     } else if (command === '/unblock') {
       if (!(await requireAdmin(message))) return;
-      // 两种方式：/unblock <index> 或 回复某条消息再 /unblock
+      // 两种方式：回复 or /unblock <index>
       if (args) {
         const index = parseInt(args.split(' ')[0], 10);
         if (!isNaN(index)) {
           return unblockByIndex(index);
         } else {
-          return sendMessage({
-            chat_id: ADMIN_UID,
-            text: '无效的序号。'
-          });
+          return sendMessage({ chat_id: ADMIN_UID, text: '无效的序号。' });
         }
       } else {
         // 没有 args — 由 reply_to_message 分支处理
@@ -450,90 +446,118 @@ async function onMessage(message) {
       }
 
       if (localFraudList.length === 0) {
-        return sendMessage({
-          chat_id: message.chat.id,
-          text: '本地没有骗子ID。'
-        });
+        return sendMessage({ chat_id: message.chat.id, text: '本地没有骗子ID。' });
       } else {
         const fraudListText = await Promise.all(localFraudList.map(async uid => {
           const userInfo = await searchUserByUID(uid);
           const nickname = userInfo ? `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim() : '未知';
           return `UID: ${uid}, 昵称: ${nickname}`;
         }));
-        return sendMessage({
-          chat_id: message.chat.id,
-          text: `本地骗子ID列表:\n${fraudListText.join('\n')}`
-        });
+        return sendMessage({ chat_id: message.chat.id, text: `本地骗子ID列表:\n${fraudListText.join('\n')}` });
       }
     } else if (command === '/search') {
       if (!(await requireAdmin(message))) return;
+
+      // 优先：如果是回复管理员收到的被转发消息，取映射
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const userInfo = await getChat(guestChatId);
+          if (userInfo) {
+            const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
+            return sendMessage({ chat_id: message.chat.id, text: `UID: ${guestChatId}, 昵称: ${nickname}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `找不到 UID: ${guestChatId} 的详细信息` });
+          }
+        } else {
+          // 回退：若 reply_to_message 不是转发映射（也可能是其他消息），提示
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /search <uid>
       if (args) {
         const searchId = args.split(' ')[0].toString();
-        const userInfo = await searchUserByUID(searchId);
+        const userInfo = await getChat(searchId);
         if (userInfo) {
-          const nickname = `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim();
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `UID: ${searchId}, 昵称: ${nickname}`
-          });
+          const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
+          return sendMessage({ chat_id: message.chat.id, text: `UID: ${searchId}, 昵称: ${nickname}` });
         } else {
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `无法找到 UID: ${searchId} 的用户信息`
-          });
+          return sendMessage({ chat_id: message.chat.id, text: `无法找到 UID: ${searchId} 的用户信息` });
         }
       } else {
-        return sendMessage({
-          chat_id: message.chat.id,
-          text: '使用方法: /search 用户UID'
-        });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /search，或 /search <UID>' });
       }
     } else if (command === '/fraud') {
       if (!(await requireAdmin(message))) return;
+
+      // 优先：回复方式（取转发映射）
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const idStr = String(guestChatId);
+          if (!localFraudList.includes(idStr)) {
+            localFraudList.push(idStr);
+            await saveFraudList();
+            return sendMessage({ chat_id: message.chat.id, text: `已添加骗子ID: ${idStr}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `骗子ID ${idStr} 已存在` });
+          }
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /fraud <uid>
       if (args) {
         const fraudId = args.split(' ')[0].toString();
         if (!localFraudList.includes(fraudId)) {
           localFraudList.push(fraudId);
           await saveFraudList();
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `已添加骗子ID: ${fraudId}`
-          });
+          return sendMessage({ chat_id: message.chat.id, text: `已添加骗子ID: ${fraudId}` });
         } else {
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `骗子ID: ${fraudId} 已存在`
-          });
+          return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 已存在` });
         }
       } else {
-        return sendMessage({
-          chat_id: message.chat.id,
-          text: '使用方法: /fraud 用户UID'
-        });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /fraud，或 /fraud <UID>' });
       }
     } else if (command === '/unfraud') {
       if (!(await requireAdmin(message))) return;
+
+      // 优先：回复方式
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const idStr = String(guestChatId);
+          const idx = localFraudList.indexOf(idStr);
+          if (idx > -1) {
+            localFraudList.splice(idx, 1);
+            await saveFraudList();
+            return sendMessage({ chat_id: message.chat.id, text: `已移除骗子ID: ${idStr}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `骗子ID ${idStr} 不在本地列表中` });
+          }
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /unfraud <uid>
       if (args) {
         const fraudId = args.split(' ')[0].toString();
         const index = localFraudList.indexOf(fraudId);
         if (index > -1) {
           localFraudList.splice(index, 1);
           await saveFraudList();
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `已移除骗子ID: ${fraudId}`
-          });
+          return sendMessage({ chat_id: message.chat.id, text: `已移除骗子ID: ${fraudId}` });
         } else {
-          return sendMessage({
-            chat_id: message.chat.id,
-            text: `骗子ID: ${fraudId} 不在本地列表中`
-          });
+          return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 不在本地列表中` });
         }
       } else {
-        return sendMessage({
-          chat_id: message.chat.id,
-          text: '使用方法: /unfraud 用户UID'
-        });
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 回复管理员收到的消息并输入 /unfraud，或 /unfraud <UID>' });
       }
     }
   } // end if command
