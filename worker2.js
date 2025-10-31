@@ -1,6 +1,6 @@
 const TOKEN = ENV_BOT_TOKEN // Get it from @BotFather
 const WEBHOOK = '/endpoint'
-const SECRET = ENV_BOT_SECRET // A-Z, a-z, 0-9, _ and -
+const SECRET = ENV_BOT_SECRET // A-Z, a-z, 0-9, _ and - 
 const ADMIN_UID = ENV_ADMIN_UID // your user id, get it from https://t.me/username_to_id_bot
 
 const NOTIFY_INTERVAL = 3600 * 1000;
@@ -19,7 +19,6 @@ let chatTargetUpdated = false; // 标志是否更新了聊天目标
 const blockedUsers = []; // 本地存储被屏蔽用户的数组
 let pendingMessage = null; // 全局变量保存待发送的消息
 
-
 // 在程序启动时加载会话状态
 loadChatSession();
 // 在程序启动时加载被屏蔽用户列表
@@ -31,11 +30,25 @@ function escapeMarkdown(text) {
   return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
 }
 
+/** 新增： 判断是否管理员 和 权限校验函数 */
+function isAdmin(chatId) {
+  return chatId.toString() === ADMIN_UID;
+}
+
+function requireAdmin(message) {
+  if (!isAdmin(message.chat.id)) {
+    sendMessage({
+      chat_id: message.chat.id,
+      text: '此命令仅限管理员使用。'
+    });
+    return false;
+  }
+  return true;
+}
 
 /**
  * Return url to telegram api, optionally with parameters added
  */
- 
 function apiUrl(methodName, params = null) {
   let query = ''
   if (params) {
@@ -48,8 +61,6 @@ function requestTelegram(methodName, body, params = null){
   return fetch(apiUrl(methodName, params), body)
     .then(r => r.json())
 }
-
-
 
 function makeReqBody(body){
   return {
@@ -99,7 +110,6 @@ async function generateRecentChatButtons() {
   const recentChatTargets = await getRecentChatTargets();
   const buttons = await Promise.all(recentChatTargets.map(async chatId => {
     const userInfo = await getUserInfo(chatId);
-    console.log(`UserInfo for chatId ${chatId}:`, userInfo); // 调试信息
     const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
     return {
       text: `发给：${nickname}`,
@@ -133,10 +143,8 @@ async function loadBlockedUsers() {
 // 最近聊天目标函数
 async function saveRecentChatTargets(chatId) {
   let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
-  // 如果聊天目标已经存在，则移到最前面
   recentChatTargets = recentChatTargets.filter(id => id !== chatId.toString());
   recentChatTargets.unshift(chatId.toString());
-  // 保持最多五个聊天目标
   if (recentChatTargets.length > 5) {
     recentChatTargets.pop();
   }
@@ -147,7 +155,6 @@ async function getRecentChatTargets() {
   let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
   return recentChatTargets.map(id => id.toString());
 }
-
 
 // 保存骗子id到kv空间
 async function saveFraudList() {
@@ -173,8 +180,6 @@ async function setBotCommands() {
     { command: 'unfraud', description: '移除骗子ID - [本地库] (仅管理员)' },
     { command: 'list', description: '查看骗子ID列表 - [本地库] (仅管理员)' },
     { command: 'blocklist', description: '查看屏蔽用户列表 - [本地库] (仅管理员)' }
-    
-    // 在此添加更多命令
   ];
 
   return requestTelegram('setMyCommands', makeReqBody({ commands }));
@@ -195,7 +200,6 @@ addEventListener('fetch', event => {
   }
 })
 
-
 async function handleWebhook(event) {
   if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== SECRET) {
     return new Response('Unauthorized', { status: 403 })
@@ -214,9 +218,10 @@ async function onUpdate(update) {
     await onCallbackQuery(update.callback_query);
   }
 }
+
 async function getUserInfo(chatId) {
   const response = await requestTelegram('getChat', makeReqBody({ chat_id: chatId }));
-  console.log(`Response for getUserInfo with chatId ${chatId}:`, response); // 调试信息
+  console.log(`Response for getUserInfo with chatId ${chatId}:`, response);
   if (response.ok) {
     return response.result;
   } else {
@@ -227,7 +232,7 @@ async function getUserInfo(chatId) {
 
 async function getChatMember(chatId) {
   const response = await requestTelegram('getChatMember', makeReqBody({ chat_id: chatId, user_id: chatId }));
-  console.log(`Response for getChatMember with chatId ${chatId}:`, response); // 调试信息
+  console.log(`Response for getChatMember with chatId ${chatId}:`, response);
   if (response.ok) {
     return response.result;
   } else {
@@ -238,7 +243,7 @@ async function getChatMember(chatId) {
 
 async function getUserProfilePhotos(userId) {
   const response = await requestTelegram('getUserProfilePhotos', makeReqBody({ user_id: userId }));
-  console.log(`Response for getUserProfilePhotos with userId ${userId}:`, response); // 调试信息
+  console.log(`Response for getUserProfilePhotos with userId ${userId}:`, response);
   if (response.ok) {
     const photos = response.result.photos;
     if (photos.length > 0) {
@@ -254,7 +259,7 @@ async function getUserProfilePhotos(userId) {
 
 async function getChat(chatId) {
   const response = await requestTelegram('getChat', makeReqBody({ chat_id: chatId }));
-  console.log(`Response for getChat with chatId ${chatId}:`, response); // 调试信息
+  console.log(`Response for getChat with chatId ${chatId}:`, response);
   if (response.ok) {
     return response.result;
   } else {
@@ -286,19 +291,15 @@ async function onMessage(message) {
     const repliedChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
     if (repliedChatId) {
       currentChatTarget = repliedChatId;
-      await setCurrentChatTarget(repliedChatId); // 更新当前聊天目标
-      await saveRecentChatTargets(repliedChatId); // 保存最近的聊天目标
-
-      // 获取被回复用户的信息
+      await setCurrentChatTarget(repliedChatId);
+      await saveRecentChatTargets(repliedChatId);
       const userInfo = await getUserInfo(repliedChatId);
       let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${repliedChatId}`;
-      nickname = escapeMarkdown(nickname); // 转义 Markdown 特殊符号
-      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${repliedChatId}`; // 生成聊天链接
-
-      // 发送切换聊天目标的通知
+      nickname = escapeMarkdown(nickname);
+      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${repliedChatId}`;
       await sendMessage({
         chat_id: ADMIN_UID,
-        parse_mode: 'MarkdownV2', // 使用Markdown格式
+        parse_mode: 'MarkdownV2',
         text: `已切换到聊天目标:【 *${nickname}* 】 \nuid：${repliedChatId}\n[点击不用bot直接私聊](${chatLink})`
       });
     }
@@ -316,22 +317,24 @@ async function onMessage(message) {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
                     "/help - 显示此帮助信息\n" +
-                    "/search - 通过uid查询最新名字 (仅管理员)\n" + //查看指定uid最新用户名
+                    "/search - 通过uid查询最新名字 (仅管理员)\n" +
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
                     "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
-                    "/fraud - 添加骗子ID (仅管理员)\n" + // 更新帮助信息
-                    "/unfraud - 移除骗子ID (仅管理员)\n" + // 更新帮助信息
-                    "/list - 查看本地骗子ID列表 (仅管理员)\n" + // 添加新命令
-                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n" + // 添加新命令
+                    "/fraud - 添加骗子ID (仅管理员)\n" +
+                    "/unfraud - 移除骗子ID (仅管理员)\n" +
+                    "/list - 查看本地骗子ID列表 (仅管理员)\n" +
+                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n" +
                     "更多指令将在后续更新中添加。";
       return sendMessage({
         chat_id: message.chat.id,
         text: helpMsg,
       });
     } else if (message.text === '/blocklist') {
+      if (!requireAdmin(message)) return;
       return listBlockedUsers();
     } else if (message.text.startsWith('/unblock ')) {
+      if (!requireAdmin(message)) return;
       const index = parseInt(message.text.split(' ')[1], 10);
       if (!isNaN(index)) {
         return unblockByIndex(index);
@@ -341,11 +344,12 @@ async function onMessage(message) {
           text: '无效的序号。'
         });
       }
-    } else if (message.text === '/list' && message.chat.id.toString() === ADMIN_UID) {
+    } else if (message.text === '/list') {
+      if (!requireAdmin(message)) return;
       // 处理 /list 命令
       const storedList = await FRAUD_LIST.get('localFraudList');
       if (storedList) {
-        localFraudList.length = 0; // 清空当前列表，确保只包含最新数据
+        localFraudList.length = 0;
         localFraudList.push(...JSON.parse(storedList));
       }
 
@@ -357,7 +361,7 @@ async function onMessage(message) {
       } else {
         const fraudListText = await Promise.all(localFraudList.map(async uid => {
           const userInfo = await searchUserByUID(uid);
-          const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : '未知';
+          const nickname = userInfo ? `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim() : '未知';
           return `UID: ${uid}, 昵称: ${nickname}`;
         }));
         return sendMessage({
@@ -365,10 +369,11 @@ async function onMessage(message) {
           text: `本地骗子ID列表:\n${fraudListText.join('\n')}`
         });
       }
-    } else if (message.text.startsWith('/search') && message.chat.id.toString() === ADMIN_UID) {
+    } else if (message.text.startsWith('/search')) {
+      if (!requireAdmin(message)) return;
       const parts = message.text.split(' ');
       if (parts.length === 2) {
-        const searchId = parts[1].toString(); // 确保 UID 是字符串类型
+        const searchId = parts[1].toString();
         const userInfo = await searchUserByUID(searchId);
         if (userInfo) {
           const nickname = `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim();
@@ -388,13 +393,14 @@ async function onMessage(message) {
           text: '使用方法: /search 用户UID'
         });
       }
-    } else if (message.text.startsWith('/fraud') && message.chat.id.toString() === ADMIN_UID) {
+    } else if (message.text.startsWith('/fraud')) {
+      if (!requireAdmin(message)) return;
       const parts = message.text.split(' ');
       if (parts.length === 2) {
-        const fraudId = parts[1].toString(); // 确保 UID 是字符串类型
-        if (!localFraudList.includes(fraudId)) { // 检查是否已经存在
-          localFraudList.push(fraudId); // 添加到本地数组
-          await saveFraudList(); // 保存更新后的列表
+        const fraudId = parts[1].toString();
+        if (!localFraudList.includes(fraudId)) {
+          localFraudList.push(fraudId);
+          await saveFraudList();
           return sendMessage({
             chat_id: message.chat.id,
             text: `已添加骗子ID: ${fraudId}`
@@ -411,14 +417,15 @@ async function onMessage(message) {
           text: '使用方法: /fraud 用户UID'
         });
       }
-    } else if (message.text.startsWith('/unfraud') && message.chat.id.toString() === ADMIN_UID) {
+    } else if (message.text.startsWith('/unfraud')) {
+      if (!requireAdmin(message)) return;
       const parts = message.text.split(' ');
       if (parts.length === 2) {
-        const fraudId = parts[1].toString(); // 确保 UID 是字符串类型
+        const fraudId = parts[1].toString();
         const index = localFraudList.indexOf(fraudId);
         if (index > -1) {
-          localFraudList.splice(index, 1); // 从本地数组中移除
-          await saveFraudList(); // 保存更新后的列表
+          localFraudList.splice(index, 1);
+          await saveFraudList();
           return sendMessage({
             chat_id: message.chat.id,
             text: `已移除骗子ID: ${fraudId}`
@@ -438,9 +445,9 @@ async function onMessage(message) {
     }
   }
 
-
-  // 以下是管理员专用命令
+  // 以下是管理员专用命令 - 以 /block, /unblock, /checkblock 为例
   if (message.text === '/block') {
+    if (!requireAdmin(message)) return;
     if (message.reply_to_message) {
       return handleBlock(message);
     } else {
@@ -451,16 +458,18 @@ async function onMessage(message) {
     }
   }
   if (message.text === '/unblock') {
+    if (!requireAdmin(message)) return;
     if (message.reply_to_message) {
       return handleUnBlock(message);
     } else {
       return sendMessage({
         chat_id: message.chat.id,
-        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
+        text: '使用方法: 请【 回复某条消息并输入 /unblock 】或【使用 /unblock 屏蔽序号 】来解除屏蔽用户。'
       });
     }
   }
   if (message.text === '/checkblock') {
+    if (!requireAdmin(message)) return;
     if (message.reply_to_message) {
       return checkBlock(message);
     } else {
@@ -470,32 +479,30 @@ async function onMessage(message) {
       });
     }
   }
+
   if (message.chat.id.toString() === ADMIN_UID) {
     if (message.reply_to_message) {
-      let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
-      console.log("guestChatId:", guestChatId); // 日志输出
+      const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+      console.log("guestChatId:", guestChatId);
       if (guestChatId) {
-        currentChatTarget = guestChatId;  // 更新当前聊天目标
-        await saveRecentChatTargets(guestChatId); // 保存最近的聊天目标
+        currentChatTarget = guestChatId;
+        await saveRecentChatTargets(guestChatId);
         if (message.text) {
-          // 发送管理员输入的文本消息内容
           await sendMessage({
             chat_id: guestChatId,
             text: message.text,
           });
         } else if (message.photo || message.video || message.document || message.audio) {
-            console.log("Copying media message:", message.message_id); // 日志输出
-            // 如果消息包含媒体文件，使用 copyMessage 方法复制媒体文件
-            await copyMessage({
-              chat_id: guestChatId,
-              from_chat_id: message.chat.id,
-              message_id: message.message_id,
-            });
-          }
+          console.log("Copying media message:", message.message_id);
+          await copyMessage({
+            chat_id: guestChatId,
+            from_chat_id: message.chat.id,
+            message_id: message.message_id,
+          });
+        }
       }
     } else {
       if (!currentChatTarget) {
-        // 保存消息内容
         pendingMessage = message;
         const recentChatButtons = await generateRecentChatButtons();
         return sendMessage({
@@ -505,14 +512,12 @@ async function onMessage(message) {
         });
       }
       if (message.text) {
-        // 直接发送文本消息到当前聊天目标
         await sendMessage({
           chat_id: currentChatTarget,
           text: message.text,
         });
       } else if (message.photo || message.video || message.document || message.audio) {
-        console.log("Copying media message:", message.message_id); // 日志输出
-        // 如果消息包含媒体文件，使用 copyMessage 方法复制媒体文件
+        console.log("Copying media message:", message.message_id);
         await copyMessage({
           chat_id: currentChatTarget,
           from_chat_id: message.chat.id,
@@ -522,9 +527,9 @@ async function onMessage(message) {
     }
     return; // 确保管理员自己不会收到消息
   }
+
   return handleGuestMessage(message);
 }
-
 
 async function sendDirectMessage(text) {
   if (currentChatTarget) {
@@ -541,7 +546,7 @@ async function sendDirectMessage(text) {
 }
 
 async function handleGuestMessage(message) {
-  let chatId = message.chat.id.toString();
+  const chatId = message.chat.id;
   let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" });
 
   if (isblocked) {
@@ -551,7 +556,7 @@ async function handleGuestMessage(message) {
     });
   }
 
-  let forwardReq = await forwardMessage({
+  const forwardReq = await forwardMessage({
     chat_id: ADMIN_UID,
     from_chat_id: message.chat.id,
     message_id: message.message_id
@@ -559,49 +564,47 @@ async function handleGuestMessage(message) {
 
   if (forwardReq.ok) {
     await nfd.put('msg-map-' + forwardReq.result.message_id, chatId);
-    // 只有当新的聊天目标与当前聊天目标不同时，才发送提示按钮
     if (currentChatTarget !== chatId) {
-      chatTargetUpdated = false; // 重置标志，因为有新的聊天目标
-      if (!chatTargetUpdated) { // 检查标志
+      chatTargetUpdated = false;
+      if (!chatTargetUpdated) {
         const userInfo = await getUserInfo(chatId);
         let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
-        nickname = escapeMarkdown(nickname); // 转义 Markdown 特殊符号
-        const chatLink = `tg://user?id=${chatId}`; // 生成聊天链接
+        nickname = escapeMarkdown(nickname);
+        const chatLink = `tg://user?id=${chatId}`;
         let messageText = `新的聊天目标: \n*${nickname}*\nUID: ${chatId}\n[点击不用bot直接私聊](${chatLink})`;
         if (await isFraud(chatId)) {
-          messageText += `\n\n*请注意，对方是骗子!*`; // 添加警告信息
+          messageText += `\n\n*请注意，对方是骗子!*`;
         }
         await sendMessage({
           chat_id: ADMIN_UID,
-          parse_mode: 'MarkdownV2', // 使用Markdown格式
+          parse_mode: 'MarkdownV2',
           text: messageText,
           ...generateKeyboard([{ text: `选择${nickname}`, callback_data: `select_${chatId}` }])
         });
-        chatTargetUpdated = true; // 设置标志
+        chatTargetUpdated = true;
       }
     } else {
-      chatTargetUpdated = true; // 如果当前聊天目标与消息发送者相同，更新标志
+      chatTargetUpdated = true;
     }
-    // 将新的聊天目标添加到最近聊天的数组中
     await saveRecentChatTargets(chatId);
   }
   return handleNotify(message);
 }
 
 async function sendPhoto(msg) {
-  return requestTelegram('sendPhoto', makeReqBody(msg));
+  return requestTelegram('sendPhoto', makeReqBody(msg))
 }
 
 async function sendVideo(msg) {
-  return requestTelegram('sendVideo', makeReqBody(msg));
+  return requestTelegram('sendVideo', makeReqBody(msg))
 }
 
 async function sendDocument(msg) {
-  return requestTelegram('sendDocument', makeReqBody(msg));
+  return requestTelegram('sendDocument', makeReqBody(msg))
 }
 
 async function sendAudio(msg) {
-  return requestTelegram('sendAudio', makeReqBody(msg));
+  return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
 async function onCallbackQuery(callbackQuery) {
@@ -612,32 +615,27 @@ async function onCallbackQuery(callbackQuery) {
     const selectedChatId = data.split('_')[1];
     if (currentChatTarget !== selectedChatId) {
       currentChatTarget = selectedChatId;
-      chatTargetUpdated = true; // 设置标志
-      await saveRecentChatTargets(selectedChatId); // 保存最近的聊天目标
-      await setCurrentChatTarget(selectedChatId); // 更新当前聊天目标
+      chatTargetUpdated = true;
+      await saveRecentChatTargets(selectedChatId);
+      await setCurrentChatTarget(selectedChatId);
       const userInfo = await getUserInfo(selectedChatId);
       let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
-      nickname = escapeMarkdown(nickname); // 转义 Markdown 特殊符号
-      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${selectedChatId}`; // 生成聊天链接
-      let messageText = `已切换到聊天目标:【 *${nickname}* 】 \nuid：${selectedChatId}\n[点击不用bot直接私聊](${chatLink})`;
+      nickname = escapeMarkdown(nickname);
+      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${selectedChatId}`;
+      let messageText = `已切换到聊天目标:【 *${nickname}* ]\nuid：${selectedChatId}\n[点击不用bot直接私聊](${chatLink})`;
       if (await isFraud(selectedChatId)) {
-        messageText += `\n\n*请注意，对方是骗子!*`; // 添加警告信息
+        messageText += `\n\n*请注意，对方是骗子!*`;
       }
-      // 发送切换聊天目标的通知
       await sendMessage({
         chat_id: ADMIN_UID,
-        parse_mode: 'MarkdownV2', // 使用Markdown格式
+        parse_mode: 'MarkdownV2',
         text: messageText
       });
-      // 新增：更新会话状态
       chatSessions[ADMIN_UID] = {
         target: selectedChatId,
         timestamp: Date.now()
       };
       await saveChatSession();
-      // 发送之前保存的消息
-      // 发送之前保存的消息
-      // 发送之前保存的消息
       if (pendingMessage) {
         try {
           if (pendingMessage.text) {
@@ -645,25 +643,7 @@ async function onCallbackQuery(callbackQuery) {
               chat_id: currentChatTarget,
               text: pendingMessage.text,
             });
-          } else if (pendingMessage.photo) {
-            await copyMessage({
-              chat_id: currentChatTarget,
-              from_chat_id: ADMIN_UID,
-              message_id: pendingMessage.message_id,
-            });
-          } else if (pendingMessage.video) {
-            await copyMessage({
-              chat_id: currentChatTarget,
-              from_chat_id: ADMIN_UID,
-              message_id: pendingMessage.message_id,
-            });
-          } else if (pendingMessage.document) {
-            await copyMessage({
-              chat_id: currentChatTarget,
-              from_chat_id: ADMIN_UID,
-              message_id: pendingMessage.message_id,
-            });
-          } else if (pendingMessage.audio) {
+          } else if (pendingMessage.photo || pendingMessage.video || pendingMessage.document || pendingMessage.audio) {
             await copyMessage({
               chat_id: currentChatTarget,
               from_chat_id: ADMIN_UID,
@@ -673,16 +653,16 @@ async function onCallbackQuery(callbackQuery) {
           await sendMessage({
             chat_id: ADMIN_UID,
             text: "消息已成功转发给目标用户。",
-            reply_to_message_id: pendingMessage.message_id // 引用上一条消息
+            reply_to_message_id: pendingMessage.message_id
           });
         } catch (error) {
           await sendMessage({
             chat_id: ADMIN_UID,
             text: "消息转发失败，请重试。",
-            reply_to_message_id: pendingMessage.message_id // 引用上一条消息
+            reply_to_message_id: pendingMessage.message_id
           });
         }
-        pendingMessage = null; // 清空待发送消息
+        pendingMessage = null;
       }
     }
   }
@@ -693,10 +673,10 @@ async function getCurrentChatTarget() {
   const session = await FRAUD_LIST.get('currentChatTarget', { type: 'json' });
   if (session) {
     const elapsed = Date.now() - session.timestamp;
-    if (elapsed < 30 * 60 * 1000) { // 30分钟
+    if (elapsed < 30 * 60 * 1000) {
       return session.target;
     } else {
-      await FRAUD_LIST.delete('currentChatTarget'); // 删除过期的聊天目标
+      await FRAUD_LIST.delete('currentChatTarget');
     }
   }
   return null;
@@ -711,13 +691,11 @@ async function setCurrentChatTarget(target) {
 }
 
 async function handleNotify(message) {
-  // 先判断是否是诈骗人员，如果是，则直接提醒
-  // 如果不是，则根据时间间隔提醒：用户id，交易注意点等
   let chatId = message.chat.id;
   if (await isFraud(chatId)) {
     return sendMessage({
       chat_id: ADMIN_UID,
-      parse_mode: 'Markdown', // 使用Markdown格式
+      parse_mode: 'Markdown',
       text: `*请注意对方是骗子*！！ \n UID：${chatId}`
     });
   }
@@ -734,7 +712,7 @@ async function handleNotify(message) {
 }
 
 async function handleBlock(message) {
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+  const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   if (guestChatId === ADMIN_UID) {
     return sendMessage({
       chat_id: ADMIN_UID,
@@ -745,9 +723,8 @@ async function handleBlock(message) {
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
   await nfd.put('isblocked-' + guestChatId, true);
 
-  blockedUsers.push(guestChatId); // 添加到本地数组
-  await saveBlockedUsers(); // 保存更新后的列表
-
+  blockedUsers.push(guestChatId);
+  await saveBlockedUsers();
   return sendMessage({
     chat_id: ADMIN_UID,
     text: `用户 ${nickname} 已被屏蔽`,
@@ -755,15 +732,15 @@ async function handleBlock(message) {
 }
 
 async function handleUnBlock(message) {
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+  const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
   await nfd.put('isblocked-' + guestChatId, false);
 
   const index = blockedUsers.indexOf(guestChatId);
   if (index > -1) {
-    blockedUsers.splice(index, 1); // 从本地数组中移除
-    await saveBlockedUsers(); // 保存更新后的列表
+    blockedUsers.splice(index, 1);
+    await saveBlockedUsers();
   }
 
   return sendMessage({
@@ -773,7 +750,7 @@ async function handleUnBlock(message) {
 }
 
 async function checkBlock(message) {
-  let guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+  const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   let isBlocked = await nfd.get('isblocked-' + guestChatId, { type: "json" });
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
@@ -782,7 +759,6 @@ async function checkBlock(message) {
     text: `用户 ${nickname}` + (isBlocked ? ' 已被屏蔽' : ' 未被屏蔽')
   });
 }
-
 
 async function listBlockedUsers() {
   if (blockedUsers.length === 0) {
@@ -811,9 +787,9 @@ async function unblockByIndex(index) {
     });
   }
   const guestChatId = blockedUsers[index - 1];
-  await nfd.put('isblocked-' + guestChatId, false); // 确保键名一致
-  blockedUsers.splice(index - 1, 1); // 从本地数组中移除
-  await saveBlockedUsers(); // 保存更新后的列表
+  await nfd.put('isblocked-' + guestChatId, false);
+  blockedUsers.splice(index - 1, 1);
+  await saveBlockedUsers();
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
   return sendMessage({
@@ -822,11 +798,6 @@ async function unblockByIndex(index) {
   });
 }
 
-
-
-//Send plain text message
-//https://core.telegram.org/bots/api#sendmessage
-
 async function sendPlainText(chatId, text) {
   return sendMessage({
     chat_id: chatId,
@@ -834,24 +805,15 @@ async function sendPlainText(chatId, text) {
   });
 }
 
-//
-//  Set webhook to this worker's url
-//  https://core.telegram.org/bots/api#setwebhook
-
 async function registerWebhook (event, requestUrl, suffix, secret) {
-  // https://core.telegram.org/bots/api#setwebhook
-  const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${suffix}`
-  const r = await (await fetch(apiUrl('setWebhook', { url: webhookUrl, secret_token: secret }))).json()
-  return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2))
+  const webhookUrl = `${requestUrl.protocol}//${requestUrl.hostname}${suffix}`;
+  const r = await (await fetch(apiUrl('setWebhook', { url: webhookUrl, secret_token: secret }))).json();
+  return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2));
 }
 
-//
-// Remove webhook
-// https://core.telegram.org/bots/api#setwebhook
-
 async function unRegisterWebhook (event) {
-  const r = await (await fetch(apiUrl('setWebhook', { url: '' }))).json()
-  return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2))
+  const r = await (await fetch(apiUrl('setWebhook', { url: '' }))).json();
+  return new Response('ok' in r && r.ok ? 'Ok' : JSON.stringify(r, null, 2));
 }
 
 async function isFraud(id){
@@ -859,7 +821,7 @@ async function isFraud(id){
   if (localFraudList.includes(id)) {
     return true;
   }
-  let db = await fetch(fraudDb).then(r => r.text());
-  let arr = db.split('\n').filter(v => v);
+  const db = await fetch(fraudDb).then(r => r.text());
+  const arr = db.split('\n').filter(v => v);
   return arr.includes(id);
 }
