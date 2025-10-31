@@ -1,7 +1,7 @@
 const TOKEN = ENV_BOT_TOKEN // Get it from @BotFather
 const WEBHOOK = '/endpoint'
 const SECRET = ENV_BOT_SECRET // A-Z, a-z, 0-9, _ and - 
-const ADMIN_UID = ENV_ADMIN_UID // your user id, get it from https://t.me/username_to_id_bot
+const ADMIN_UID = String(ENV_ADMIN_UID || ''); // 强制为字符串，避免类型比较问题
 
 const NOTIFY_INTERVAL = 3600 * 1000;
 const fraudDb = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/fraud.db';
@@ -30,21 +30,36 @@ function escapeMarkdown(text) {
   return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
 }
 
-/** 新增： 判断是否管理员 和 权限校验函数 */
-function isAdmin(chatId) {
-  return chatId.toString() === ADMIN_UID;
+// -------------------- 权限 & 命令解析相关 --------------------
+
+// 判断传入的 userId（可能是数字或字符串）是否为管理员
+function isAdmin(userId) {
+  return String(userId) === ADMIN_UID;
 }
 
-function requireAdmin(message) {
-  if (!isAdmin(message.chat.id)) {
-    sendMessage({
-      chat_id: message.chat.id,
-      text: '此命令仅限管理员使用。'
-    });
-    return false;
-  }
-  return true;
+// debug 辅助（可部署后移除或注释）
+function debugLog(...args) {
+  try { console.log(...args); } catch(e) {}
 }
+
+/**
+ * 从 message 里提取标准化的 bot 命令（去掉 @BotUsername）
+ * 返回例如 "/block" 或 "/start"；如果没有命令返回 null
+ */
+function getCommandFromMessage(message) {
+  if (!message || !message.text) return null;
+
+  if (Array.isArray(message.entities)) {
+    const cmdEnt = message.entities.find(e => e.type === 'bot_command');
+    if (cmdEnt) {
+      const raw = message.text.substr(cmdEnt.offset, cmdEnt.length);
+      return raw.split('@')[0];
+    }
+  }
+  return message.text.split(' ')[0].split('@')[0];
+}
+
+// -------------------- Telegram API wrapper --------------------
 
 /**
  * Return url to telegram api, optionally with parameters added
@@ -72,8 +87,16 @@ function makeReqBody(body){
   }
 }
 
-function sendMessage(msg = {}){
-  return requestTelegram('sendMessage', makeReqBody(msg))
+// 带日志的 sendMessage（替换原有简单包装）
+async function sendMessage(msg = {}) {
+  try {
+    const res = await requestTelegram('sendMessage', makeReqBody(msg));
+    console.log('[sendMessage] request ->', JSON.stringify(msg), ' response ->', JSON.stringify(res));
+    return res;
+  } catch (err) {
+    console.error('[sendMessage] error', err, 'msg=', JSON.stringify(msg));
+    throw err;
+  }
 }
 
 function copyMessage(msg = {}){
@@ -94,6 +117,8 @@ function generateKeyboard(options) {
     }
   };
 }
+
+// -------------------- KV 存储操作 --------------------
 
 async function saveChatSession() {
   await FRAUD_LIST.put('chatSessions', JSON.stringify(chatSessions));
@@ -127,9 +152,9 @@ async function searchUserByUID(uid) {
   const userInfo = await getUserInfo(uid);
   if (userInfo) {
     const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
-    return `UID: ${uid}, 昵称: ${nickname}`;
+    return { user: userInfo, text: `UID: ${uid}, 昵称: ${nickname}` };
   } else {
-    return `无法找到 UID: ${uid} 的用户信息`;
+    return null;
   }
 }
 
@@ -185,6 +210,8 @@ async function setBotCommands() {
   return requestTelegram('setMyCommands', makeReqBody({ commands }));
 }
 
+// -------------------- Cloudflare Worker HTTP 入口 --------------------
+
 addEventListener('fetch', event => {
   const url = new URL(event.request.url)
   if (url.pathname === WEBHOOK) {
@@ -206,6 +233,8 @@ async function handleWebhook(event) {
   }
 
   const update = await event.request.json()
+  try { console.log('[onUpdate] incoming update:', JSON.stringify(update)); } catch(e){}
+
   event.waitUntil(onUpdate(update))
 
   return new Response('Ok')
@@ -218,6 +247,8 @@ async function onUpdate(update) {
     await onCallbackQuery(update.callback_query);
   }
 }
+
+// -------------------- Telegram helper getters --------------------
 
 async function getUserInfo(chatId) {
   const response = await requestTelegram('getChat', makeReqBody({ chat_id: chatId }));
@@ -268,7 +299,60 @@ async function getChat(chatId) {
   }
 }
 
+// -------------------- requireAdmin (async, 带回退通知) --------------------
+
+/**
+ * 返回 boolean：是否为管理员。
+ * 若不是管理员，会尝试发送提示：
+ *  1) 先向当前会话 message.chat.id 发送 '此命令仅限管理员使用。'
+ *  2) 若发送失败或 telegram 返回 ok:false，则回退向 message.from.id 私聊发送
+ */
+async function requireAdmin(message) {
+  const senderId = message && message.from ? message.from.id : null;
+  const idToCheck = senderId || (message && message.chat ? message.chat.id : null);
+
+  debugLog('requireAdmin called. senderId=', senderId, 'idToCheck=', idToCheck, 'ADMIN_UID=', ADMIN_UID);
+
+  if (isAdmin(idToCheck)) {
+    return true;
+  }
+
+  // 不是管理员：先尝试在当前会话通知
+  const chatTarget = message && message.chat && message.chat.id ? message.chat.id : senderId;
+
+  try {
+    const res = await sendMessage({ chat_id: chatTarget, text: '此命令仅限管理员使用。' });
+    // 若 telegram 返回 ok:false，尝试回退通知
+    if (!res || !res.ok) {
+      debugLog('[requireAdmin] send to chat failed, trying fallback. res=', res);
+      if (senderId && String(senderId) !== String(chatTarget)) {
+        try {
+          await sendMessage({ chat_id: senderId, text: '此命令仅限管理员使用。' });
+        } catch (e2) {
+          console.error('[requireAdmin] fallback sendMessage failed', e2);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[requireAdmin] sendMessage to chatTarget failed', err);
+    // 回退私聊通知
+    if (senderId && String(senderId) !== String(chatTarget)) {
+      try {
+        await sendMessage({ chat_id: senderId, text: '此命令仅限管理员使用。' });
+      } catch (e2) {
+        console.error('[requireAdmin] fallback sendMessage failed', e2);
+      }
+    }
+  }
+
+  return false;
+}
+
+// -------------------- 消息处理 --------------------
+
 async function onMessage(message) {
+  try { console.log('[onMessage] raw message:', JSON.stringify(message)); } catch(e){}
+
   const chatId = message.chat.id.toString();
 
   // 初始化会话状态
@@ -305,15 +389,22 @@ async function onMessage(message) {
     }
   }
 
-  if (message.text) {
-    if (message.text === '/start') {
+  // 解析命令与参数
+  const command = getCommandFromMessage(message); // '/start' '/block' '/fraud' ...
+  const args = message.text ? message.text.slice((command||'').length).trim() : '';
+
+  debugLog('onMessage command=', command, 'args=', args, 'from=', message.from && message.from.id);
+
+  // 若 message.text 存在且识别出命令，走命令分支
+  if (message.text && command) {
+    if (command === '/start') {
       let startMsg = "你可以用这个机器人跟我对话。写下您想要发送的消息（图片、视频），我会尽快回复您！";
       await setBotCommands();
       return sendMessage({
         chat_id: message.chat.id,
         text: startMsg,
       });
-    } else if (message.text === '/help') {
+    } else if (command === '/help') {
       let helpMsg = "可用指令列表:\n" +
                     "/start - 启动机器人会话\n" +
                     "/help - 显示此帮助信息\n" +
@@ -330,22 +421,27 @@ async function onMessage(message) {
         chat_id: message.chat.id,
         text: helpMsg,
       });
-    } else if (message.text === '/blocklist') {
-      if (!requireAdmin(message)) return;
+    } else if (command === '/blocklist') {
+      if (!(await requireAdmin(message))) return;
       return listBlockedUsers();
-    } else if (message.text.startsWith('/unblock ')) {
-      if (!requireAdmin(message)) return;
-      const index = parseInt(message.text.split(' ')[1], 10);
-      if (!isNaN(index)) {
-        return unblockByIndex(index);
+    } else if (command === '/unblock') {
+      if (!(await requireAdmin(message))) return;
+      // 两种方式：/unblock <index> 或 回复某条消息再 /unblock
+      if (args) {
+        const index = parseInt(args.split(' ')[0], 10);
+        if (!isNaN(index)) {
+          return unblockByIndex(index);
+        } else {
+          return sendMessage({
+            chat_id: ADMIN_UID,
+            text: '无效的序号。'
+          });
+        }
       } else {
-        return sendMessage({
-          chat_id: ADMIN_UID,
-          text: '无效的序号。'
-        });
+        // 没有 args — 由 reply_to_message 分支处理
       }
-    } else if (message.text === '/list') {
-      if (!requireAdmin(message)) return;
+    } else if (command === '/list') {
+      if (!(await requireAdmin(message))) return;
       // 处理 /list 命令
       const storedList = await FRAUD_LIST.get('localFraudList');
       if (storedList) {
@@ -369,11 +465,10 @@ async function onMessage(message) {
           text: `本地骗子ID列表:\n${fraudListText.join('\n')}`
         });
       }
-    } else if (message.text.startsWith('/search')) {
-      if (!requireAdmin(message)) return;
-      const parts = message.text.split(' ');
-      if (parts.length === 2) {
-        const searchId = parts[1].toString();
+    } else if (command === '/search') {
+      if (!(await requireAdmin(message))) return;
+      if (args) {
+        const searchId = args.split(' ')[0].toString();
         const userInfo = await searchUserByUID(searchId);
         if (userInfo) {
           const nickname = `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim();
@@ -393,11 +488,10 @@ async function onMessage(message) {
           text: '使用方法: /search 用户UID'
         });
       }
-    } else if (message.text.startsWith('/fraud')) {
-      if (!requireAdmin(message)) return;
-      const parts = message.text.split(' ');
-      if (parts.length === 2) {
-        const fraudId = parts[1].toString();
+    } else if (command === '/fraud') {
+      if (!(await requireAdmin(message))) return;
+      if (args) {
+        const fraudId = args.split(' ')[0].toString();
         if (!localFraudList.includes(fraudId)) {
           localFraudList.push(fraudId);
           await saveFraudList();
@@ -417,11 +511,10 @@ async function onMessage(message) {
           text: '使用方法: /fraud 用户UID'
         });
       }
-    } else if (message.text.startsWith('/unfraud')) {
-      if (!requireAdmin(message)) return;
-      const parts = message.text.split(' ');
-      if (parts.length === 2) {
-        const fraudId = parts[1].toString();
+    } else if (command === '/unfraud') {
+      if (!(await requireAdmin(message))) return;
+      if (args) {
+        const fraudId = args.split(' ')[0].toString();
         const index = localFraudList.indexOf(fraudId);
         if (index > -1) {
           localFraudList.splice(index, 1);
@@ -443,11 +536,11 @@ async function onMessage(message) {
         });
       }
     }
-  }
+  } // end if command
 
-  // 以下是管理员专用命令 - 以 /block, /unblock, /checkblock 为例
-  if (message.text === '/block') {
-    if (!requireAdmin(message)) return;
+  // 以下是管理员专用命令 - 以 /block, /unblock, /checkblock 为例（如果命令为回复消息触发）
+  if (message.text && getCommandFromMessage(message) === '/block') {
+    if (!(await requireAdmin(message))) return;
     if (message.reply_to_message) {
       return handleBlock(message);
     } else {
@@ -457,8 +550,9 @@ async function onMessage(message) {
       });
     }
   }
-  if (message.text === '/unblock') {
-    if (!requireAdmin(message)) return;
+
+  if (message.text && getCommandFromMessage(message) === '/unblock') {
+    if (!(await requireAdmin(message))) return;
     if (message.reply_to_message) {
       return handleUnBlock(message);
     } else {
@@ -468,8 +562,9 @@ async function onMessage(message) {
       });
     }
   }
-  if (message.text === '/checkblock') {
-    if (!requireAdmin(message)) return;
+
+  if (message.text && getCommandFromMessage(message) === '/checkblock') {
+    if (!(await requireAdmin(message))) return;
     if (message.reply_to_message) {
       return checkBlock(message);
     } else {
@@ -480,7 +575,8 @@ async function onMessage(message) {
     }
   }
 
-  if (message.chat.id.toString() === ADMIN_UID) {
+  // 管理员消息处理（管理员可以直接私聊机器人并发送消息/媒体转发给目标用户）
+  if (isAdmin(message.from && message.from.id ? message.from.id : message.chat.id)) {
     if (message.reply_to_message) {
       const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
       console.log("guestChatId:", guestChatId);
@@ -528,6 +624,7 @@ async function onMessage(message) {
     return; // 确保管理员自己不会收到消息
   }
 
+  // 普通访客消息处理
   return handleGuestMessage(message);
 }
 
@@ -611,6 +708,7 @@ async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
   const message = callbackQuery.message;
 
+  // 权限检查：若需要限制 callback 的操作也可以用 isAdmin(callbackQuery.from.id)
   if (data.startsWith('select_')) {
     const selectedChatId = data.split('_')[1];
     if (currentChatTarget !== selectedChatId) {
@@ -713,7 +811,7 @@ async function handleNotify(message) {
 
 async function handleBlock(message) {
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
-  if (guestChatId === ADMIN_UID) {
+  if (String(guestChatId) === ADMIN_UID) {
     return sendMessage({
       chat_id: ADMIN_UID,
       text: '不能屏蔽自己'
