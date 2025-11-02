@@ -795,23 +795,23 @@ async function sendAudio(msg) {
   return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
-// -------------------- 回调处理（完整实现，包含弹窗确认 & 取消行为） --------------------
+// -------------------- 回调处理（完整实现，包含会话内确认 & 取消行为） --------------------
 
 async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
   const message = callbackQuery.message;
 
-  // 先快速 ACK callbackQuery（不带文字），避免 Telegram 长时间 loading
-  try {
-    await requestTelegram('answerCallbackQuery', makeReqBody({
-      callback_query_id: callbackQuery.id
-    }));
-  } catch (e) {
-    console.warn('[onCallbackQuery] initial answerCallbackQuery failed', e);
-  }
+  // 注意：不在这里盲目 ACK；各分支按需发送会话消息，并在未回答时做一次最小 ACK 避免长时间 loading。
 
   // 权限检查：只有管理员允许操作这些按钮
   if (!isAdmin(callbackQuery.from && callbackQuery.from.id)) {
+    try {
+      await requestTelegram('answerCallbackQuery', makeReqBody({
+        callback_query_id: callbackQuery.id,
+        text: '仅限管理员使用该按钮。',
+        show_alert: false
+      }));
+    } catch (e) { /* ignore */ }
     return sendMessage({ chat_id: callbackQuery.from.id, text: '仅限管理员使用该按钮。' });
   }
 
@@ -820,54 +820,39 @@ async function onCallbackQuery(callbackQuery) {
   const action = parts[0];
   const uid = parts.slice(1).join('_'); // 允许 uid 中可能含下划线（防护）
 
-  // 按钮动作分发
+  // 标志本次 callback 是否已经用 answerCallbackQuery 回应（防止重复）
+  let answered = false;
+
   try {
     switch (action) {
       case 'select': {
         const selectedChatId = uid;
+
+        // 获取展示名（纯文本）
+        const userInfo = await getUserInfo(selectedChatId);
+        const namePlain = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
+
         if (currentChatTarget !== selectedChatId) {
           currentChatTarget = selectedChatId;
           chatTargetUpdated = true;
           await saveRecentChatTargets(selectedChatId);
           await setCurrentChatTarget(selectedChatId);
 
-          const userInfo = await getUserInfo(selectedChatId);
-          // 供弹窗显示的纯文本昵称
-          const namePlain = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
-          // 供消息正文使用（需要 MarkdownV2 转义）
-          const nickname = escapeMarkdown(namePlain);
-
-          const chatLink = userInfo && userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${selectedChatId}`;
-          let messageText = `已切换到聊天目标:【 *${nickname}* ]\nuid：${selectedChatId}\n[点击不用bot直接私聊](${chatLink})`;
-          if (await isFraud(selectedChatId)) {
-            messageText += `\n\n*请注意，对方是骗子!*`;
-          }
-
-          // 向管理员发送切换确认消息（保留原有行为）
-          await sendMessage({
-            chat_id: ADMIN_UID,
-            parse_mode: 'MarkdownV2',
-            text: messageText
-          });
-
-          // 保存会话
+          // 保存会话（KV & 内存）
           chatSessions[ADMIN_UID] = {
             target: selectedChatId,
             timestamp: Date.now()
           };
           await saveChatSession();
 
-          // 显示弹窗（callback alert），让管理员立即看到确认
-          try {
-            await requestTelegram('answerCallbackQuery', makeReqBody({
-              callback_query_id: callbackQuery.id,
-              text: `已切换到聊天目标：${namePlain}`,
-              show_alert: true
-            }));
-          } catch (e) {
-            console.warn('[onCallbackQuery][select] answerCallbackQuery (alert) failed', e);
-          }
+          // 向管理员会话发送固定格式的普通会话消息（不使用弹窗）
+          const confirmationText = `已选择当前聊天目标：${namePlain}（UID: ${selectedChatId}）`;
+          // 如果可能，回复到原通知消息（让对话更清晰）
+          const sendOpts = { chat_id: ADMIN_UID, text: confirmationText };
+          if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
+          await sendMessage(sendOpts);
 
+          // 如果对方在骗子列表，额外在会话中提示也可以保留（原代码会在通知时提示，此处可选）
           // 如果有 pendingMessage，继续转发
           if (pendingMessage) {
             try {
@@ -898,16 +883,11 @@ async function onCallbackQuery(callbackQuery) {
             pendingMessage = null;
           }
         } else {
-          // 已经是当前目标，也给个弹窗确认（避免用户疑惑）
-          const userInfo = await getUserInfo(selectedChatId);
-          const namePlain = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
-          try {
-            await requestTelegram('answerCallbackQuery', makeReqBody({
-              callback_query_id: callbackQuery.id,
-              text: `当前已是聊天目标：${namePlain}`,
-              show_alert: true
-            }));
-          } catch (e) { /* ignore */ }
+          // 已经是当前目标，仍向会话发送相同格式的确认消息
+          const confirmationText = `已选择当前聊天目标：${namePlain}（UID: ${selectedChatId}）`;
+          const sendOpts = { chat_id: ADMIN_UID, text: confirmationText };
+          if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
+          await sendMessage(sendOpts);
         }
         break;
       }
@@ -930,8 +910,8 @@ async function onCallbackQuery(callbackQuery) {
           await sendMessage({ chat_id: ADMIN_UID, text: '不能屏蔽自己' });
           break;
         }
-        const userInfo = await getUserInfo(guestChatId);
-        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        const userInfo2 = await getUserInfo(guestChatId);
+        const nickname = userInfo2 ? `${userInfo2.first_name} ${userInfo2.last_name || ''}`.trim() : `UID:${guestChatId}`;
         await nfd.put('isblocked-' + guestChatId, true);
 
         if (!blockedUsers.includes(guestChatId)) {
@@ -948,8 +928,8 @@ async function onCallbackQuery(callbackQuery) {
 
       case 'unblock': {
         const guestChatId = uid;
-        const userInfo = await getUserInfo(guestChatId);
-        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        const userInfo2 = await getUserInfo(guestChatId);
+        const nickname2 = userInfo2 ? `${userInfo2.first_name} ${userInfo2.last_name || ''}`.trim() : `UID:${guestChatId}`;
         await nfd.put('isblocked-' + guestChatId, false);
 
         const index = blockedUsers.indexOf(guestChatId);
@@ -960,7 +940,7 @@ async function onCallbackQuery(callbackQuery) {
 
         await sendMessage({
           chat_id: ADMIN_UID,
-          text: `用户 ${nickname} 已解除屏蔽`,
+          text: `用户 ${nickname2} 已解除屏蔽`,
         });
         break;
       }
@@ -968,11 +948,11 @@ async function onCallbackQuery(callbackQuery) {
       case 'checkblock': {
         const guestChatId = uid;
         let isBlocked = await nfd.get('isblocked-' + guestChatId, { type: "json" });
-        const userInfo = await getUserInfo(guestChatId);
-        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        const userInfo2 = await getUserInfo(guestChatId);
+        const nickname3 = userInfo2 ? `${userInfo2.first_name} ${userInfo2.last_name || ''}`.trim() : `UID:${guestChatId}`;
         await sendMessage({
           chat_id: ADMIN_UID,
-          text: `用户 ${nickname}` + (isBlocked ? ' 已被屏蔽' : ' 未被屏蔽')
+          text: `用户 ${nickname3}` + (isBlocked ? ' 已被屏蔽' : ' 未被屏蔽')
         });
         break;
       }
@@ -1033,12 +1013,10 @@ async function onCallbackQuery(callbackQuery) {
       }
 
       case 'cancel': {
-        // 修改点：删除原通知消息（如果可用），然后只发送一条确认消息。
+        // 删除原通知消息（如果可用），然后发送确认
         try {
-          // 获取展示名（纯文本）
           const namePlain = await getDisplayName(uid, false);
 
-          // 1) 尝试删除原通知消息（避免留下多余提示）
           if (message && message.chat && message.message_id) {
             try {
               await requestTelegram('deleteMessage', makeReqBody({
@@ -1050,10 +1028,8 @@ async function onCallbackQuery(callbackQuery) {
             }
           }
 
-          // 2) 清除 pendingMessage
           pendingMessage = null;
 
-          // 3) 如果当前聊天目标和按钮对应 uid 相同，则清空（KV + 内存），并发送单条确认
           if (currentChatTarget && String(currentChatTarget) === String(uid)) {
             currentChatTarget = null;
             try {
@@ -1061,13 +1037,11 @@ async function onCallbackQuery(callbackQuery) {
             } catch (e) {
               console.warn('[onCallbackQuery][cancel] delete currentChatTarget from KV failed', e);
             }
-            // 只发送这一个确认（例如：已取消选择并清空当前聊天目标：万物皆可盘（UID: 8268532098））
             await sendMessage({
               chat_id: ADMIN_UID,
               text: `已取消选择并清空当前聊天目标：${namePlain}（UID: ${uid}）`
             });
           } else {
-            // 如果不是当前聊天目标，仍然删除原按钮并发送单条确认（当前聊天目标保持不变）
             await sendMessage({
               chat_id: ADMIN_UID,
               text: `已取消选择：${namePlain}（UID: ${uid}），当前聊天目标保持不变。`
@@ -1075,7 +1049,6 @@ async function onCallbackQuery(callbackQuery) {
           }
         } catch (e) {
           console.error('[onCallbackQuery][cancel] overall failed', e);
-          // 兜底提示（单条）
           pendingMessage = null;
           await sendMessage({ chat_id: ADMIN_UID, text: `已取消操作（UID: ${uid}）。` });
         }
@@ -1089,6 +1062,17 @@ async function onCallbackQuery(callbackQuery) {
   } catch (err) {
     console.error('[onCallbackQuery] handler error', err);
     await sendMessage({ chat_id: ADMIN_UID, text: `处理回调出错: ${err && err.message ? err.message : err}` });
+  }
+
+  // 如果到这里还没有用 answerCallbackQuery 回应，做一次最小 ACK 避免 Telegram 一直 loading
+  if (!answered) {
+    try {
+      await requestTelegram('answerCallbackQuery', makeReqBody({
+        callback_query_id: callbackQuery.id
+      }));
+    } catch (e) {
+      console.warn('[onCallbackQuery] final answerCallbackQuery failed', e);
+    }
   }
 }
 
