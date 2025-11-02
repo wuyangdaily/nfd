@@ -118,6 +118,48 @@ function generateKeyboard(options) {
   };
 }
 
+/**
+ * 生成管理员命令键盘（两列，每行两个按钮），并在最后添加“选择”和“取消”两行按钮
+ * uid: 用户 id（字符串或数字）
+ * nicknamePlain: 纯文本昵称（不做 Markdown 转义），用于按钮显示
+ *
+ * 按钮文本为中文显示（callback_data 保持 action_uid）
+ */
+function generateAdminCommandKeyboard(uid, nicknamePlain) {
+  const rows = [
+    [
+      { text: '查看昵称', callback_data: `search_${uid}` },
+      { text: '屏蔽用户', callback_data: `block_${uid}` }
+    ],
+    [
+      { text: '解除屏蔽', callback_data: `unblock_${uid}` },
+      { text: '检查屏蔽', callback_data: `checkblock_${uid}` }
+    ],
+    [
+      { text: '添加骗子', callback_data: `fraud_${uid}` },
+      { text: '移除骗子', callback_data: `unfraud_${uid}` }
+    ],
+    [
+      { text: '查看骗子列表', callback_data: `list_${uid}` },
+      { text: '查看屏蔽列表', callback_data: `blocklist_${uid}` }
+    ],
+    // 保留“选择”按钮在独立一行
+    [
+      { text: `选择 ${nicknamePlain}`, callback_data: `select_${uid}` }
+    ],
+    // 取消按钮显示昵称
+    [
+      { text: `取消 ${nicknamePlain}`, callback_data: `cancel_${uid}` }
+    ]
+  ];
+
+  return {
+    reply_markup: {
+      inline_keyboard: rows
+    }
+  };
+}
+
 // -------------------- KV 存储操作 --------------------
 
 async function saveChatSession() {
@@ -296,6 +338,28 @@ async function getChat(chatId) {
   } else {
     console.error(`Failed to get chat info for chat ID ${chatId}:`, response);
     return null;
+  }
+}
+
+/**
+ * 新增：获取用户展示名（优先 first_name + last_name；找不到则 UID）
+ * 如果 forMarkdownV2 为 true，会对文本做 MarkdownV2 转义，适合直接放到 parse_mode:'MarkdownV2' 文本中。
+ */
+async function getDisplayName(uid, forMarkdownV2 = false) {
+  try {
+    const userInfo = await getUserInfo(uid);
+    let name;
+    if (userInfo) {
+      name = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim();
+      if (!name) name = `UID:${uid}`;
+    } else {
+      name = `UID:${uid}`;
+    }
+    if (forMarkdownV2) return escapeMarkdown(name);
+    return name;
+  } catch (e) {
+    console.warn('[getDisplayName] failed for', uid, e);
+    return forMarkdownV2 ? escapeMarkdown(`UID:${uid}`) : `UID:${uid}`;
   }
 }
 
@@ -689,18 +753,21 @@ async function handleGuestMessage(message) {
       chatTargetUpdated = false;
       if (!chatTargetUpdated) {
         const userInfo = await getUserInfo(chatId);
-        let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
-        nickname = escapeMarkdown(nickname);
+        // 纯文本昵称（用于按钮）
+        const nicknamePlain = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${chatId}`;
+        // 转义昵称用于 MarkdownV2 文本显示
+        const nicknameEsc = escapeMarkdown(nicknamePlain);
         const chatLink = `tg://user?id=${chatId}`;
-        let messageText = `新的聊天目标: \n*${nickname}*\nUID: ${chatId}\n[点击不用bot直接私聊](${chatLink})`;
+        let messageText = `新的聊天目标: \n*${nicknameEsc}*\nUID: ${chatId}\n[点击不用bot直接私聊](${chatLink})`;
         if (await isFraud(chatId)) {
           messageText += `\n\n*请注意，对方是骗子!*`;
         }
+        // 这里改为使用管理员命令键盘（两列每行两个，中文按钮），并在选择/取消按钮显示纯文本昵称
         await sendMessage({
           chat_id: ADMIN_UID,
           parse_mode: 'MarkdownV2',
           text: messageText,
-          ...generateKeyboard([{ text: `选择${nickname}`, callback_data: `select_${chatId}` }])
+          ...generateAdminCommandKeyboard(chatId, nicknamePlain)
         });
         chatTargetUpdated = true;
       }
@@ -728,65 +795,300 @@ async function sendAudio(msg) {
   return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
+// -------------------- 回调处理（完整实现，包含弹窗确认 & 取消行为） --------------------
+
 async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
   const message = callbackQuery.message;
 
-  // 权限检查：若需要限制 callback 的操作也可以用 isAdmin(callbackQuery.from.id)
-  if (data.startsWith('select_')) {
-    const selectedChatId = data.split('_')[1];
-    if (currentChatTarget !== selectedChatId) {
-      currentChatTarget = selectedChatId;
-      chatTargetUpdated = true;
-      await saveRecentChatTargets(selectedChatId);
-      await setCurrentChatTarget(selectedChatId);
-      const userInfo = await getUserInfo(selectedChatId);
-      let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
-      nickname = escapeMarkdown(nickname);
-      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${selectedChatId}`;
-      let messageText = `已切换到聊天目标:【 *${nickname}* ]\nuid：${selectedChatId}\n[点击不用bot直接私聊](${chatLink})`;
-      if (await isFraud(selectedChatId)) {
-        messageText += `\n\n*请注意，对方是骗子!*`;
+  // 先快速 ACK callbackQuery（不带文字），避免 Telegram 长时间 loading
+  try {
+    await requestTelegram('answerCallbackQuery', makeReqBody({
+      callback_query_id: callbackQuery.id
+    }));
+  } catch (e) {
+    console.warn('[onCallbackQuery] initial answerCallbackQuery failed', e);
+  }
+
+  // 权限检查：只有管理员允许操作这些按钮
+  if (!isAdmin(callbackQuery.from && callbackQuery.from.id)) {
+    return sendMessage({ chat_id: callbackQuery.from.id, text: '仅限管理员使用该按钮。' });
+  }
+
+  // 解析 action 和 uid
+  const parts = data.split('_');
+  const action = parts[0];
+  const uid = parts.slice(1).join('_'); // 允许 uid 中可能含下划线（防护）
+
+  // 按钮动作分发
+  try {
+    switch (action) {
+      case 'select': {
+        const selectedChatId = uid;
+        if (currentChatTarget !== selectedChatId) {
+          currentChatTarget = selectedChatId;
+          chatTargetUpdated = true;
+          await saveRecentChatTargets(selectedChatId);
+          await setCurrentChatTarget(selectedChatId);
+
+          const userInfo = await getUserInfo(selectedChatId);
+          // 供弹窗显示的纯文本昵称
+          const namePlain = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
+          // 供消息正文使用（需要 MarkdownV2 转义）
+          const nickname = escapeMarkdown(namePlain);
+
+          const chatLink = userInfo && userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${selectedChatId}`;
+          let messageText = `已切换到聊天目标:【 *${nickname}* ]\nuid：${selectedChatId}\n[点击不用bot直接私聊](${chatLink})`;
+          if (await isFraud(selectedChatId)) {
+            messageText += `\n\n*请注意，对方是骗子!*`;
+          }
+
+          // 向管理员发送切换确认消息（保留原有行为）
+          await sendMessage({
+            chat_id: ADMIN_UID,
+            parse_mode: 'MarkdownV2',
+            text: messageText
+          });
+
+          // 保存会话
+          chatSessions[ADMIN_UID] = {
+            target: selectedChatId,
+            timestamp: Date.now()
+          };
+          await saveChatSession();
+
+          // 显示弹窗（callback alert），让管理员立即看到确认
+          try {
+            await requestTelegram('answerCallbackQuery', makeReqBody({
+              callback_query_id: callbackQuery.id,
+              text: `已切换到聊天目标：${namePlain}`,
+              show_alert: true
+            }));
+          } catch (e) {
+            console.warn('[onCallbackQuery][select] answerCallbackQuery (alert) failed', e);
+          }
+
+          // 如果有 pendingMessage，继续转发
+          if (pendingMessage) {
+            try {
+              if (pendingMessage.text) {
+                await sendMessage({
+                  chat_id: currentChatTarget,
+                  text: pendingMessage.text,
+                });
+              } else if (pendingMessage.photo || pendingMessage.video || pendingMessage.document || pendingMessage.audio) {
+                await copyMessage({
+                  chat_id: currentChatTarget,
+                  from_chat_id: ADMIN_UID,
+                  message_id: pendingMessage.message_id,
+                });
+              }
+              await sendMessage({
+                chat_id: ADMIN_UID,
+                text: "消息已成功转发给目标用户。",
+                reply_to_message_id: pendingMessage.message_id
+              });
+            } catch (error) {
+              await sendMessage({
+                chat_id: ADMIN_UID,
+                text: "消息转发失败，请重试。",
+                reply_to_message_id: pendingMessage.message_id
+              });
+            }
+            pendingMessage = null;
+          }
+        } else {
+          // 已经是当前目标，也给个弹窗确认（避免用户疑惑）
+          const userInfo = await getUserInfo(selectedChatId);
+          const namePlain = userInfo ? `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim() : `UID:${selectedChatId}`;
+          try {
+            await requestTelegram('answerCallbackQuery', makeReqBody({
+              callback_query_id: callbackQuery.id,
+              text: `当前已是聊天目标：${namePlain}`,
+              show_alert: true
+            }));
+          } catch (e) { /* ignore */ }
+        }
+        break;
       }
-      await sendMessage({
-        chat_id: ADMIN_UID,
-        parse_mode: 'MarkdownV2',
-        text: messageText
-      });
-      chatSessions[ADMIN_UID] = {
-        target: selectedChatId,
-        timestamp: Date.now()
-      };
-      await saveChatSession();
-      if (pendingMessage) {
+
+      case 'search': {
+        const searchId = uid;
+        const userInfo = await getChat(searchId);
+        if (userInfo) {
+          const nickname = `${userInfo.first_name || ''} ${userInfo.last_name || ''}`.trim();
+          await sendMessage({ chat_id: ADMIN_UID, text: `UID: ${searchId}, 昵称: ${nickname}` });
+        } else {
+          await sendMessage({ chat_id: ADMIN_UID, text: `无法找到 UID: ${searchId} 的用户信息` });
+        }
+        break;
+      }
+
+      case 'block': {
+        const guestChatId = uid;
+        if (String(guestChatId) === ADMIN_UID) {
+          await sendMessage({ chat_id: ADMIN_UID, text: '不能屏蔽自己' });
+          break;
+        }
+        const userInfo = await getUserInfo(guestChatId);
+        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        await nfd.put('isblocked-' + guestChatId, true);
+
+        if (!blockedUsers.includes(guestChatId)) {
+          blockedUsers.push(guestChatId);
+          await saveBlockedUsers();
+        }
+
+        await sendMessage({
+          chat_id: ADMIN_UID,
+          text: `用户 ${nickname} 已被屏蔽`,
+        });
+        break;
+      }
+
+      case 'unblock': {
+        const guestChatId = uid;
+        const userInfo = await getUserInfo(guestChatId);
+        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        await nfd.put('isblocked-' + guestChatId, false);
+
+        const index = blockedUsers.indexOf(guestChatId);
+        if (index > -1) {
+          blockedUsers.splice(index, 1);
+          await saveBlockedUsers();
+        }
+
+        await sendMessage({
+          chat_id: ADMIN_UID,
+          text: `用户 ${nickname} 已解除屏蔽`,
+        });
+        break;
+      }
+
+      case 'checkblock': {
+        const guestChatId = uid;
+        let isBlocked = await nfd.get('isblocked-' + guestChatId, { type: "json" });
+        const userInfo = await getUserInfo(guestChatId);
+        const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
+        await sendMessage({
+          chat_id: ADMIN_UID,
+          text: `用户 ${nickname}` + (isBlocked ? ' 已被屏蔽' : ' 未被屏蔽')
+        });
+        break;
+      }
+
+      case 'fraud': {
+        const fraudId = uid;
+        if (!localFraudList.includes(String(fraudId))) {
+          localFraudList.push(String(fraudId));
+          await saveFraudList();
+          await sendMessage({ chat_id: ADMIN_UID, text: `已添加骗子ID: ${fraudId}` });
+        } else {
+          await sendMessage({ chat_id: ADMIN_UID, text: `骗子ID ${fraudId} 已存在` });
+        }
+        break;
+      }
+
+      case 'unfraud': {
+        const fraudId = uid;
+        const idx = localFraudList.indexOf(String(fraudId));
+        if (idx > -1) {
+          localFraudList.splice(idx, 1);
+          await saveFraudList();
+          await sendMessage({ chat_id: ADMIN_UID, text: `已移除骗子ID: ${fraudId}` });
+        } else {
+          await sendMessage({ chat_id: ADMIN_UID, text: `骗子ID ${fraudId} 不在本地列表中` });
+        }
+        break;
+      }
+
+      case 'list': {
+        // 列出本地骗子ID
+        if (localFraudList.length === 0) {
+          await sendMessage({ chat_id: ADMIN_UID, text: '本地没有骗子ID。' });
+        } else {
+          const fraudListText = await Promise.all(localFraudList.map(async uid => {
+            const userInfo = await searchUserByUID(uid);
+            const nickname = userInfo ? `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim() : '未知';
+            return `UID: ${uid}, 昵称: ${nickname}`;
+          }));
+          await sendMessage({ chat_id: ADMIN_UID, text: `本地骗子ID列表:\n${fraudListText.join('\n')}` });
+        }
+        break;
+      }
+
+      case 'blocklist': {
+        // 列出被屏蔽用户
+        if (blockedUsers.length === 0) {
+          await sendMessage({ chat_id: ADMIN_UID, text: '没有被屏蔽的用户。' });
+        } else {
+          const blockedListText = await Promise.all(blockedUsers.map(async (uid, index) => {
+            const userInfo = await getUserInfo(uid);
+            const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : '未知';
+            return `${index + 1}. UID: ${uid}, 昵称: ${nickname}`;
+          }));
+          await sendMessage({ chat_id: ADMIN_UID, text: `被屏蔽的用户列表:\n${blockedListText.join('\n')}` });
+        }
+        break;
+      }
+
+      case 'cancel': {
+        // 修改点：删除原通知消息（如果可用），然后只发送一条确认消息。
         try {
-          if (pendingMessage.text) {
+          // 获取展示名（纯文本）
+          const namePlain = await getDisplayName(uid, false);
+
+          // 1) 尝试删除原通知消息（避免留下多余提示）
+          if (message && message.chat && message.message_id) {
+            try {
+              await requestTelegram('deleteMessage', makeReqBody({
+                chat_id: message.chat.id,
+                message_id: message.message_id
+              }));
+            } catch (e) {
+              console.warn('[onCallbackQuery][cancel] deleteMessage failed, will continue', e);
+            }
+          }
+
+          // 2) 清除 pendingMessage
+          pendingMessage = null;
+
+          // 3) 如果当前聊天目标和按钮对应 uid 相同，则清空（KV + 内存），并发送单条确认
+          if (currentChatTarget && String(currentChatTarget) === String(uid)) {
+            currentChatTarget = null;
+            try {
+              await FRAUD_LIST.delete('currentChatTarget');
+            } catch (e) {
+              console.warn('[onCallbackQuery][cancel] delete currentChatTarget from KV failed', e);
+            }
+            // 只发送这一个确认（例如：已取消选择并清空当前聊天目标：万物皆可盘（UID: 8268532098））
             await sendMessage({
-              chat_id: currentChatTarget,
-              text: pendingMessage.text,
+              chat_id: ADMIN_UID,
+              text: `已取消选择并清空当前聊天目标：${namePlain}（UID: ${uid}）`
             });
-          } else if (pendingMessage.photo || pendingMessage.video || pendingMessage.document || pendingMessage.audio) {
-            await copyMessage({
-              chat_id: currentChatTarget,
-              from_chat_id: ADMIN_UID,
-              message_id: pendingMessage.message_id,
+          } else {
+            // 如果不是当前聊天目标，仍然删除原按钮并发送单条确认（当前聊天目标保持不变）
+            await sendMessage({
+              chat_id: ADMIN_UID,
+              text: `已取消选择：${namePlain}（UID: ${uid}），当前聊天目标保持不变。`
             });
           }
-          await sendMessage({
-            chat_id: ADMIN_UID,
-            text: "消息已成功转发给目标用户。",
-            reply_to_message_id: pendingMessage.message_id
-          });
-        } catch (error) {
-          await sendMessage({
-            chat_id: ADMIN_UID,
-            text: "消息转发失败，请重试。",
-            reply_to_message_id: pendingMessage.message_id
-          });
+        } catch (e) {
+          console.error('[onCallbackQuery][cancel] overall failed', e);
+          // 兜底提示（单条）
+          pendingMessage = null;
+          await sendMessage({ chat_id: ADMIN_UID, text: `已取消操作（UID: ${uid}）。` });
         }
-        pendingMessage = null;
+        break;
       }
+
+      default:
+        await sendMessage({ chat_id: ADMIN_UID, text: `未知操作: ${action}` });
+        break;
     }
+  } catch (err) {
+    console.error('[onCallbackQuery] handler error', err);
+    await sendMessage({ chat_id: ADMIN_UID, text: `处理回调出错: ${err && err.message ? err.message : err}` });
   }
 }
 
