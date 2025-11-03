@@ -846,7 +846,7 @@ async function onCallbackQuery(callbackQuery) {
           await saveChatSession();
 
           // 向管理员会话发送固定格式的普通会话消息（不使用弹窗）
-          const confirmationText = `已选择当前聊天目标：${namePlain}（UID: ${selectedChatId}）`;
+          const confirmationText = `已选择当前聊天目标：${namePlain}${selectedChatId}`;
           // 如果可能，回复到原通知消息（让对话更清晰）
           const sendOpts = { chat_id: ADMIN_UID, text: confirmationText };
           if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
@@ -884,7 +884,7 @@ async function onCallbackQuery(callbackQuery) {
           }
         } else {
           // 已经是当前目标，仍向会话发送相同格式的确认消息
-          const confirmationText = `已选择当前聊天目标：${namePlain}（UID: ${selectedChatId}）`;
+          const confirmationText = `已选择当前聊天目标：${namePlain}${selectedChatId}`;
           const sendOpts = { chat_id: ADMIN_UID, text: confirmationText };
           if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
           await sendMessage(sendOpts);
@@ -1039,12 +1039,12 @@ async function onCallbackQuery(callbackQuery) {
             }
             await sendMessage({
               chat_id: ADMIN_UID,
-              text: `已取消选择并清空当前聊天目标：${namePlain}（UID: ${uid}）`
+              text: `已取消选择并清空当前聊天目标：${namePlain}${uid}`
             });
           } else {
             await sendMessage({
               chat_id: ADMIN_UID,
-              text: `已取消选择：${namePlain}（UID: ${uid}），当前聊天目标保持不变。`
+              text: `已取消选择：${namePlain}${uid}，当前聊天目标保持不变。`
             });
           }
         } catch (e) {
