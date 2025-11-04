@@ -119,10 +119,9 @@ function generateKeyboard(options) {
 }
 
 /**
- * 生成管理员命令键盘（两列，每行两个按钮），并在最后添加“选择”和“取消”两行按钮
+ * 生成管理员命令键盘
  * uid: 用户 id（字符串或数字）
  * nicknamePlain: 纯文本昵称（不做 Markdown 转义），用于按钮显示
- *
  * 按钮文本为中文显示（callback_data 保持 action_uid）
  */
 function generateAdminCommandKeyboard(uid, nicknamePlain) {
@@ -143,11 +142,9 @@ function generateAdminCommandKeyboard(uid, nicknamePlain) {
       { text: '查看骗子列表', callback_data: `list_${uid}` },
       { text: '查看屏蔽列表', callback_data: `blocklist_${uid}` }
     ],
-    // 保留“选择”按钮在独立一行
     [
       { text: `选择 ${nicknamePlain}`, callback_data: `select_${uid}` }
     ],
-    // 取消按钮显示昵称
     [
       { text: `取消 ${nicknamePlain}`, callback_data: `cancel_${uid}` }
     ]
@@ -626,7 +623,7 @@ async function onMessage(message) {
     }
   } // end if command
 
-  // 以下是管理员专用命令 - 以 /block, /unblock, /checkblock 为例（如果命令为回复消息触发）
+  // 以下是管理员专用命令（如果命令为回复消息触发）
   if (message.text && getCommandFromMessage(message) === '/block') {
     if (!(await requireAdmin(message))) return;
     if (message.reply_to_message) {
@@ -663,7 +660,7 @@ async function onMessage(message) {
     }
   }
 
-  // 管理员消息处理（管理员可以直接私聊机器人并发送消息/媒体转发给目标用户）
+  // 管理员消息处理
   if (isAdmin(message.from && message.from.id ? message.from.id : message.chat.id)) {
     if (message.reply_to_message) {
       const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
@@ -762,7 +759,7 @@ async function handleGuestMessage(message) {
         if (await isFraud(chatId)) {
           messageText += `\n\n*请注意，对方是骗子!*`;
         }
-        // 这里改为使用管理员命令键盘（两列每行两个，中文按钮），并在选择/取消按钮显示纯文本昵称
+        // 这里改为使用管理员命令键盘（两列每行两个，中文按钮）
         await sendMessage({
           chat_id: ADMIN_UID,
           parse_mode: 'MarkdownV2',
@@ -845,9 +842,9 @@ async function onCallbackQuery(callbackQuery) {
           };
           await saveChatSession();
 
-          // 向管理员会话发送固定格式的普通会话消息（不使用弹窗）
+          // 向管理员会话发送固定格式的普通会话消息
           const confirmationText = `已选择当前聊天目标：${namePlain}${selectedChatId}`;
-          // 如果可能，回复到原通知消息（让对话更清晰）
+          // 如果可能，回复到原通知消息
           const sendOpts = { chat_id: ADMIN_UID, text: confirmationText };
           if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
           await sendMessage(sendOpts);
