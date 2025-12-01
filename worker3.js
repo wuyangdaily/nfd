@@ -1,4 +1,3 @@
-// worker2.js - 已整合数学验证模块（A 模式）
 // 说明见会话，部署前请检查 ENV_BOT_TOKEN, ENV_BOT_SECRET, ENV_ADMIN_UID, 以及 KV 命名 FRAUD_LIST 和 nfd
 
 const TOKEN = ENV_BOT_TOKEN // Get it from @BotFather
@@ -412,7 +411,7 @@ async function requireAdmin(message) {
   return false;
 }
 
-// -------------------- 验证模块（新增） --------------------
+// -------------------- 验证模块 --------------------
 /*
  Keys used in KV (nfd):
  - verify-<chatId> : JSON { question, options:[], correct, message_id, expires }
@@ -647,7 +646,7 @@ async function onMessage(message) {
   // 若 message.text 存在且识别出命令，走命令分支
   if (message.text && command) {
     if (command === '/start') {
-      // 要求先验证（A 模式）
+      // 要求先验证
       await sendVerify(chatId);
       return;
     } else if (command === '/help') {
@@ -923,7 +922,7 @@ async function handleGuestMessage(message) {
     });
   }
 
-  // 验证流程（A 模式）：
+  // 验证流程：
   // 1) 检查是否已验证（24 小时内）
   // 2) 检查是否正在被锁定（1 小时）
   // 3) 若未验证 -> 发送验证题并返回（不转发消息）
@@ -1002,7 +1001,7 @@ async function sendAudio(msg) {
   return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
-// -------------------- 回调处理（完整实现，包含会话内确认 & 取消行为） --------------------
+// -------------------- 回调处理 --------------------
 
 async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
