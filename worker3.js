@@ -1,5 +1,3 @@
-// 说明见会话，部署前请检查 ENV_BOT_TOKEN, ENV_BOT_SECRET, ENV_ADMIN_UID, 以及 KV 命名 FRAUD_LIST 和 nfd
-
 const TOKEN = ENV_BOT_TOKEN // Get it from @BotFather
 const WEBHOOK = '/endpoint'
 const SECRET = ENV_BOT_SECRET // A-Z, a-z, 0-9, _ and - 
@@ -424,33 +422,43 @@ function randInt(min, max) {
   return Math.floor(Math.random()*(max-min+1)) + min;
 }
 
+// 验证题目生成函数
 function createMathQuestion() {
-  // 随机生成一个简单表达式，四则运算
   const ops = ['+', '-', '*', '/'];
-  // 生成表达式深度 1 或 2（比如 "3 + 4" 或 "3 * (2 + 1)" ）
-  // 为保持简单，生成 "a op b" 或 "(a op b) op2 c"
-  const a = randInt(1, 20);
-  const b = randInt(1, 20);
   const op = ops[randInt(0, ops.length-1)];
-  let expr = `${a} ${op} ${b}`;
-  let value = evalExpression(a, op, b);
-
-  if (Math.random() < 0.4) {
-    const c = randInt(1, 10);
-    const op2 = ops[randInt(0, ops.length-1)];
-    expr = `(${expr}) ${op2} ${c}`;
-    value = evalExpression(value, op2, c);
+  
+  let a, b, expr, value;
+  
+  switch(op) {
+    case '+':
+      a = randInt(1, 50);
+      b = randInt(1, 50);
+      expr = `${a} + ${b}`;
+      value = a + b;
+      break;
+      
+    case '-':
+      a = randInt(1, 100);
+      b = randInt(1, a); // 确保结果非负
+      expr = `${a} - ${b}`;
+      value = a - b;
+      break;
+      
+    case '*':
+      a = randInt(1, 20);
+      b = randInt(1, 10);
+      expr = `${a} × ${b}`;
+      value = a * b;
+      break;
+      
+    case '/':
+      b = randInt(2, 20); // 除数不能为0
+      value = randInt(1, 10); // 商
+      a = b * value; // 被除数 = 除数 × 商，确保能整除
+      expr = `${a} ÷ ${b}`;
+      break;
   }
-
-  // 规范化结果到整数（除法采用整除或保留一位小数再四舍五入）
-  if (!Number.isFinite(value)) value = 0;
-  // 对除法进行整数或保留1位
-  if (Math.abs(value - Math.round(value)) > 0.0001) {
-    value = Math.round(value * 10) / 10; // 保留1位
-  } else {
-    value = Math.round(value);
-  }
-
+  
   return { expr, value };
 }
 
@@ -1535,4 +1543,3 @@ async function isFraud(id){
   const arr = db.split('\n').filter(v => v);
   return arr.includes(id);
 }
-
