@@ -422,7 +422,7 @@ function randInt(min, max) {
   return Math.floor(Math.random()*(max-min+1)) + min;
 }
 
-// 验证题目生成函数 - 只生成简单的 A+B, A-B, A*B, A/B 题目
+// 验证题目生成函数
 function createMathQuestion() {
   const ops = ['+', '-', '*', '/'];
   const op = ops[randInt(0, ops.length-1)];
