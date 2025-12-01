@@ -562,7 +562,7 @@ async function sendVerify(chatId) {
     };
   });
 
-  const text = `请先通过验证（1 分钟内回答）:\n计算题：\n${q.expr} = ?\n（错误3次将被锁定1小时）`;
+  const text = `请先通过验证（1 分钟内回答）:\n${q.expr} = ?\n（错误3次将被锁定1小时）`;
 
   const sent = await sendMessage({
     chat_id: chatId,
