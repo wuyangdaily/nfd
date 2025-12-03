@@ -422,44 +422,49 @@ function randInt(min, max) {
   return Math.floor(Math.random()*(max-min+1)) + min;
 }
 
-// 验证题目生成函数
 function createMathQuestion() {
+  // 随机生成一个简单表达式，四则运算
   const ops = ['+', '-', '*', '/'];
+  // 生成表达式深度 1 或 2（比如 "3 + 4" 或 "3 * (2 + 1)" ）
+  // 为保持简单，生成 "a op b" 或 "(a op b) op2 c"
+  const a = randInt(1, 20);
+  const b = randInt(1, 20);
   const op = ops[randInt(0, ops.length-1)];
-  
-  let a, b, expr, value;
-  
-  switch(op) {
-    case '+':
-      a = randInt(1, 50);
-      b = randInt(1, 50);
-      expr = `${a} + ${b}`;
-      value = a + b;
-      break;
-      
-    case '-':
-      a = randInt(1, 100);
-      b = randInt(1, a); // 确保结果非负
-      expr = `${a} - ${b}`;
-      value = a - b;
-      break;
-      
-    case '*':
-      a = randInt(1, 20);
-      b = randInt(1, 10);
-      expr = `${a} × ${b}`;
-      value = a * b;
-      break;
-      
-    case '/':
-      b = randInt(2, 20); // 除数不能为0
-      value = randInt(1, 10); // 商
-      a = b * value; // 被除数 = 除数 × 商，确保能整除
-      expr = `${a} ÷ ${b}`;
-      break;
+  let expr = `${a} ${op} ${b}`;
+  let value = evalExpression(a, op, b);
+
+  if (Math.random() < 0.4) {
+    const c = randInt(1, 10);
+    const op2 = ops[randInt(0, ops.length-1)];
+    expr = `(${expr}) ${op2} ${c}`;
+    value = evalExpression(value, op2, c);
   }
-  
+
+  // 规范化结果到整数（除法采用整除或保留一位小数再四舍五入）
+  if (!Number.isFinite(value)) value = 0;
+  // 对除法进行整数或保留1位
+  if (Math.abs(value - Math.round(value)) > 0.0001) {
+    value = Math.round(value * 10) / 10; // 保留1位
+  } else {
+    value = Math.round(value);
+  }
+
   return { expr, value };
+}
+
+function evalExpression(x, op, y) {
+  try {
+    switch(op) {
+      case '+': return x + y;
+      case '-': return x - y;
+      case '*': return x * y;
+      case '/':
+        if (y === 0) return x; // 避免除零
+        return x / y;
+    }
+  } catch (e) {
+    return 0;
+  }
 }
 
 function shuffleArray(arr) {
@@ -589,14 +594,6 @@ async function isVerified(chatId) {
   return false;
 }
 
-// 发送欢迎语函数
-async function sendWelcomeMessage(chatId) {
-  return sendMessage({
-    chat_id: chatId,
-    text: "你可以用这个机器人跟我对话。写下您想要发送的消息（图片、视频），我会尽快回复您！"
-  });
-}
-
 // -------------------- 消息处理 --------------------
 
 async function onMessage(message) {
@@ -620,13 +617,22 @@ async function onMessage(message) {
   // 获取当前聊天目标
   currentChatTarget = await getCurrentChatTarget();
 
-  // 检查用户是否被屏蔽
-  let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" });
-  if (isblocked && !isAdmin(chatId)) {
-    return sendMessage({
-      chat_id: chatId,
-      text: '您已被屏蔽，无法发送消息！'
-    });
+  if (message.reply_to_message) {
+    const repliedChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+    if (repliedChatId) {
+      currentChatTarget = repliedChatId;
+      await setCurrentChatTarget(repliedChatId);
+      await saveRecentChatTargets(repliedChatId);
+      const userInfo = await getUserInfo(repliedChatId);
+      let nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${repliedChatId}`;
+      nickname = escapeMarkdown(nickname);
+      const chatLink = userInfo.username ? `https://t.me/${userInfo.username}` : `tg://user?id=${repliedChatId}`;
+      await sendMessage({
+        chat_id: ADMIN_UID,
+        parse_mode: 'MarkdownV2',
+        text: `已切换到聊天目标:【 *${nickname}* 】 \nuid：${repliedChatId}\n[点击不用bot直接私聊](${chatLink})`
+      });
+    }
   }
 
   // 解析命令与参数
@@ -635,9 +641,209 @@ async function onMessage(message) {
 
   debugLog('onMessage command=', command, 'args=', args, 'from=', message.from && message.from.id);
 
-  // 如果是管理员，处理管理员命令
+  // 若 message.text 存在且识别出命令，走命令分支
+  if (message.text && command) {
+    if (command === '/start') {
+      // 要求先验证
+      await sendVerify(chatId);
+      return;
+    } else if (command === '/help') {
+      let helpMsg = "可用指令列表:\n" +
+                    "/start - 启动机器人会话（需先验证）\n" +
+                    "/help - 显示帮助信息\n" +
+                    "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
+                    "/block - 屏蔽用户 (仅管理员)\n" +
+                    "/unblock - 解除屏蔽用户 (仅管理员)\n" +
+                    "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
+                    "/fraud - 添加骗子ID (仅管理员)\n" +
+                    "/unfraud - 移除骗子ID (仅管理员)\n" +
+                    "/list - 查看本地骗子ID列表 (仅管理员)\n" +
+                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n";
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: helpMsg,
+      });
+    } else if (command === '/blocklist') {
+      if (!(await requireAdmin(message))) return;
+      return listBlockedUsers();
+    } else if (command === '/unblock') {
+      if (!(await requireAdmin(message))) return;
+      // 两种方式：回复 or /unblock <index>
+      if (args) {
+        const index = parseInt(args.split(' ')[0], 10);
+        if (!isNaN(index)) {
+          return unblockByIndex(index);
+        } else {
+          return sendMessage({ chat_id: ADMIN_UID, text: '无效的序号。' });
+        }
+      } else {
+        // 没有 args — 由 reply_to_message 分支处理
+      }
+    } else if (command === '/list') {
+      if (!(await requireAdmin(message))) return;
+      // 处理 /list 命令
+      const storedList = await FRAUD_LIST.get('localFraudList');
+      if (storedList) {
+        localFraudList.length = 0;
+        localFraudList.push(...JSON.parse(storedList));
+      }
+
+      if (localFraudList.length === 0) {
+        return sendMessage({ chat_id: message.chat.id, text: '本地没有骗子ID。' });
+      } else {
+        const fraudListText = await Promise.all(localFraudList.map(async uid => {
+          const userInfo = await searchUserByUID(uid);
+          const nickname = userInfo ? `${userInfo.user.first_name} ${userInfo.user.last_name || ''}`.trim() : '未知';
+          return `UID: ${uid}, 昵称: ${nickname}`;
+        }));
+        return sendMessage({ chat_id: message.chat.id, text: `本地骗子ID列表:\n${fraudListText.join('\n')}` });
+      }
+    } else if (command === '/search') {
+      if (!(await requireAdmin(message))) return;
+
+      // 优先：如果是回复管理员收到的被转发消息，取映射
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const userInfo = await getChat(guestChatId);
+          if (userInfo) {
+            const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
+            return sendMessage({ chat_id: message.chat.id, text: `UID: ${guestChatId}, 昵称: ${nickname}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `找不到 UID: ${guestChatId} 的详细信息` });
+          }
+        } else {
+          // 回退：若 reply_to_message 不是转发映射（也可能是其他消息），提示
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /search <uid>
+      if (args) {
+        const searchId = args.split(' ')[0].toString();
+        const userInfo = await getChat(searchId);
+        if (userInfo) {
+          const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
+          return sendMessage({ chat_id: message.chat.id, text: `UID: ${searchId}, 昵称: ${nickname}` });
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: `无法找到 UID: ${searchId} 的用户信息` });
+        }
+      } else {
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /search，或 /search 用户UID' });
+      }
+    } else if (command === '/fraud') {
+      if (!(await requireAdmin(message))) return;
+
+      // 优先：回复方式（取转发映射）
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const idStr = String(guestChatId);
+          if (!localFraudList.includes(idStr)) {
+            localFraudList.push(idStr);
+            await saveFraudList();
+            return sendMessage({ chat_id: message.chat.id, text: `已添加骗子ID: ${idStr}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `骗子ID ${idStr} 已存在` });
+          }
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /fraud <uid>
+      if (args) {
+        const fraudId = args.split(' ')[0].toString();
+        if (!localFraudList.includes(fraudId)) {
+          localFraudList.push(fraudId);
+          await saveFraudList();
+          return sendMessage({ chat_id: message.chat.id, text: `已添加骗子ID: ${fraudId}` });
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 已存在` });
+        }
+      } else {
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /fraud，或 /fraud 用户UID' });
+      }
+    } else if (command === '/unfraud') {
+      if (!(await requireAdmin(message))) return;
+
+      // 优先：回复方式
+      if (message.reply_to_message) {
+        const forwardedMsgId = message.reply_to_message.message_id;
+        const guestChatId = await nfd.get('msg-map-' + forwardedMsgId, { type: "json" });
+        if (guestChatId) {
+          const idStr = String(guestChatId);
+          const idx = localFraudList.indexOf(idStr);
+          if (idx > -1) {
+            localFraudList.splice(idx, 1);
+            await saveFraudList();
+            return sendMessage({ chat_id: message.chat.id, text: `已移除骗子ID: ${idStr}` });
+          } else {
+            return sendMessage({ chat_id: message.chat.id, text: `骗子ID ${idStr} 不在本地列表中` });
+          }
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。' });
+        }
+      }
+
+      // 回退：支持 /unfraud <uid>
+      if (args) {
+        const fraudId = args.split(' ')[0].toString();
+        const index = localFraudList.indexOf(fraudId);
+        if (index > -1) {
+          localFraudList.splice(index, 1);
+          await saveFraudList();
+          return sendMessage({ chat_id: message.chat.id, text: `已移除骗子ID: ${fraudId}` });
+        } else {
+          return sendMessage({ chat_id: message.chat.id, text: `骗子ID: ${fraudId} 不在本地列表中` });
+        }
+      } else {
+        return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID' });
+      }
+    }
+  } // end if command
+
+  // 以下是管理员专用命令（如果命令为回复消息触发）
+  if (message.text && getCommandFromMessage(message) === '/block') {
+    if (!(await requireAdmin(message))) return;
+    if (message.reply_to_message) {
+      return handleBlock(message);
+    } else {
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。'
+      });
+    }
+  }
+
+  if (message.text && getCommandFromMessage(message) === '/unblock') {
+    if (!(await requireAdmin(message))) return;
+    if (message.reply_to_message) {
+      return handleUnBlock(message);
+    } else {
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
+      });
+    }
+  }
+
+  if (message.text && getCommandFromMessage(message) === '/checkblock') {
+    if (!(await requireAdmin(message))) return;
+    if (message.reply_to_message) {
+      return checkBlock(message);
+    } else {
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。'
+      });
+    }
+  }
+
+  // 管理员消息处理
   if (isAdmin(message.from && message.from.id ? message.from.id : message.chat.id)) {
-    // 管理员处理逻辑
     if (message.reply_to_message) {
       const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
       console.log("guestChatId:", guestChatId);
@@ -685,69 +891,60 @@ async function onMessage(message) {
     return; // 确保管理员自己不会收到消息
   }
 
-  // 非管理员用户：检查是否已验证
-  const verified = await isVerified(chatId);
-  
-  // 如果用户已验证，处理消息转发
-  if (verified) {
-    // 如果是/help命令
-    if (command === '/help') {
-      let helpMsg = "可用指令列表:\n" +
-                    "/start - 启动机器人会话（需先验证）\n" +
-                    "/help - 显示帮助信息\n" +
-                    "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
-                    "/block - 屏蔽用户 (仅管理员)\n" +
-                    "/unblock - 解除屏蔽用户 (仅管理员)\n" +
-                    "/checkblock - 检查用户是否被屏蔽 (仅管理员)\n" +
-                    "/fraud - 添加骗子ID (仅管理员)\n" +
-                    "/unfraud - 移除骗子ID (仅管理员)\n" +
-                    "/list - 查看本地骗子ID列表 (仅管理员)\n" +
-                    "/blocklist - 查看被屏蔽用户列表 (仅管理员)\n";
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: helpMsg,
-      });
-    }
-    
-    // 如果是/start命令且已验证，显示欢迎信息
-    if (command === '/start') {
-      return sendWelcomeMessage(chatId);
-    }
-    
-    // 已验证用户的普通消息转发
-    return handleGuestMessage(message);
-  }
+  // 普通访客消息处理
+  return handleGuestMessage(message);
+}
 
-  // 用户未验证：需要先验证
-  // 检查是否被锁定
-  const lockKey = 'verify-lock-' + chatId;
-  const lockVal = await nfd.get(lockKey, { type: "json" });
-  if (lockVal && Number(lockVal) > Date.now()) {
-    const remain = Number(lockVal) - Date.now();
-    const minutes = Math.floor(remain/60000);
-    const seconds = Math.floor((remain%60000)/1000);
-    const bj = new Date(Number(lockVal)).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return sendMessage({ 
-      chat_id: chatId, 
-      text: `验证失败次数已达到 3 次，您被限制再次验证。\n还剩 ${minutes} 分 ${seconds} 秒\n解封时间 ${bj} 后再试` 
+async function sendDirectMessage(text) {
+  if (currentChatTarget) {
+    return sendMessage({
+      chat_id: currentChatTarget,
+      text: text
+    });
+  } else {
+    return sendMessage({
+      chat_id: ADMIN_UID,
+      text: "没有设置当前聊天目标，请先通过回复某条消息来设置聊天目标。"
     });
   }
-
-  // 发送验证题
-  await sendVerify(chatId);
-  return;
 }
 
 async function handleGuestMessage(message) {
   const chatId = message.chat.id;
-  
-  // 检查是否已验证
-  if (!(await isVerified(chatId))) {
-    // 未验证，应该不会走到这里，但为了安全还是处理
+  let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" });
+
+  if (isblocked) {
+    return sendMessage({
+      chat_id: chatId,
+      text: '您已被屏蔽，无法发送消息！'
+    });
+  }
+
+  // 验证流程
+  // 1) 检查是否已验证（24 小时内）
+  // 2) 检查是否正在被锁定（1 小时）
+  // 3) 若未验证 -> 发送验证题并返回（不转发消息）
+  if (await isVerified(chatId)) {
+    // 已验证 -> 继续正常逻辑（转发）
+  } else {
+    // 未验证 -> 检查是否锁定
+    const lockKey = 'verify-lock-' + chatId;
+    const lockVal = await nfd.get(lockKey, { type: "json" });
+    if (lockVal && Number(lockVal) > Date.now()) {
+      const remain = Number(lockVal) - Date.now();
+      const minutes = Math.floor(remain/60000);
+      const seconds = Math.floor((remain%60000)/1000);
+      const bj = new Date(Number(lockVal)).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+      await sendMessage({ chat_id: chatId, text: `验证失败次数已达到 3 次，您被限制再次验证。\n还剩 ${minutes} 分 ${seconds} 秒\n解封时间 ${bj} 后再试` });
+      return;
+    }
+
+    // 发送验证并返回，不转发
     await sendVerify(chatId);
     return;
   }
 
+  // 若已验证，才会走到这里并转发
   const forwardReq = await forwardMessage({
     chat_id: ADMIN_UID,
     from_chat_id: message.chat.id,
@@ -802,7 +999,7 @@ async function sendAudio(msg) {
   return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
-// -------------------- 回调处理 --------------------
+// -------------------- 回调处理（完整实现，包含会话内确认 & 取消行为） --------------------
 
 async function onCallbackQuery(callbackQuery) {
   const data = callbackQuery.data;
@@ -874,7 +1071,10 @@ async function onCallbackQuery(callbackQuery) {
       } catch (e) {}
 
       // 发送欢迎语
-      await sendWelcomeMessage(chatId);
+      await sendMessage({
+        chat_id: chatId,
+        text: "你可以用这个机器人跟我对话了。写下您想要发送的消息（图片、视频），我会尽快回复您！"
+      });
       return;
     } else {
       // 错误：+1 attempts，保存
@@ -1220,8 +1420,6 @@ async function handleNotify(message) {
 }
 
 async function handleBlock(message) {
-  if (!(await requireAdmin(message))) return;
-  
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   if (String(guestChatId) === ADMIN_UID) {
     return sendMessage({
@@ -1242,8 +1440,6 @@ async function handleBlock(message) {
 }
 
 async function handleUnBlock(message) {
-  if (!(await requireAdmin(message))) return;
-  
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
@@ -1262,8 +1458,6 @@ async function handleUnBlock(message) {
 }
 
 async function checkBlock(message) {
-  if (!(await requireAdmin(message))) return;
-  
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   let isBlocked = await nfd.get('isblocked-' + guestChatId, { type: "json" });
   const userInfo = await getUserInfo(guestChatId);
@@ -1275,8 +1469,6 @@ async function checkBlock(message) {
 }
 
 async function listBlockedUsers() {
-  if (!(await requireAdmin(message))) return;
-  
   if (blockedUsers.length === 0) {
     return sendMessage({
       chat_id: ADMIN_UID,
