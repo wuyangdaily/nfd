@@ -419,57 +419,70 @@ async function requireAdmin(message) {
 */
 
 function randInt(min, max) {
-  return Math.floor(Math.random()*(max-min+1)) + min;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function createMathQuestion() {
-  // 随机生成一个简单表达式，四则运算
-  const ops = ['+', '-', '*', '/'];
-  // 生成表达式深度 1 或 2（比如 "3 + 4" 或 "3 * (2 + 1)" ）
-  // 为保持简单，生成 "a op b" 或 "(a op b) op2 c"
-  const a = randInt(1, 20);
-  const b = randInt(1, 20);
-  const op = ops[randInt(0, ops.length-1)];
-  let expr = `${a} ${op} ${b}`;
-  let value = evalExpression(a, op, b);
-
-  if (Math.random() < 0.4) {
-    const c = randInt(1, 10);
-    const op2 = ops[randInt(0, ops.length-1)];
-    expr = `(${expr}) ${op2} ${c}`;
-    value = evalExpression(value, op2, c);
+  // 生成简单的四则运算：A+B, A-B, A×B, A÷B
+  const operations = [
+    { symbol: '+', name: '加' },
+    { symbol: '-', name: '减' },
+    { symbol: '×', name: '乘' },
+    { symbol: '÷', name: '除' }
+  ];
+  
+  // 随机选择一种运算
+  const operation = operations[randInt(0, operations.length - 1)];
+  
+  let A, B, result, expr;
+  
+  switch (operation.symbol) {
+    case '+':
+      // 加法：A和B在1-50之间，结果不超过100
+      A = randInt(1, 50);
+      B = randInt(1, 50);
+      result = A + B;
+      expr = `${A} + ${B}`;
+      break;
+      
+    case '-':
+      // 减法：A在2-100之间，B在1-A-1之间，确保结果为正数
+      A = randInt(2, 100);
+      B = randInt(1, A - 1);
+      result = A - B;
+      expr = `${A} - ${B}`;
+      break;
+      
+    case '×':
+      // 乘法：A和B在1-12之间（乘法表范围）
+      A = randInt(1, 12);
+      B = randInt(1, 12);
+      result = A * B;
+      expr = `${A} × ${B}`;
+      break;
+      
+    case '÷':
+      // 除法：确保能整除，B在2-12之间，A是B的倍数，结果在1-12之间
+      B = randInt(2, 12);
+      result = randInt(1, 12);
+      A = B * result;
+      expr = `${A} ÷ ${B}`;
+      break;
+      
+    default:
+      // 默认加法
+      A = randInt(1, 50);
+      B = randInt(1, 50);
+      result = A + B;
+      expr = `${A} + ${B}`;
   }
-
-  // 规范化结果到整数（除法采用整除或保留一位小数再四舍五入）
-  if (!Number.isFinite(value)) value = 0;
-  // 对除法进行整数或保留1位
-  if (Math.abs(value - Math.round(value)) > 0.0001) {
-    value = Math.round(value * 10) / 10; // 保留1位
-  } else {
-    value = Math.round(value);
-  }
-
-  return { expr, value };
-}
-
-function evalExpression(x, op, y) {
-  try {
-    switch(op) {
-      case '+': return x + y;
-      case '-': return x - y;
-      case '*': return x * y;
-      case '/':
-        if (y === 0) return x; // 避免除零
-        return x / y;
-    }
-  } catch (e) {
-    return 0;
-  }
+  
+  return { expr, value: result };
 }
 
 function shuffleArray(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random()*(i+1));
+    const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -525,18 +538,17 @@ async function sendVerify(chatId) {
   const options = new Set();
   options.add(String(correct));
   while (options.size < 5) {
-    // 随机附近值或完全随机
-    const delta = randInt(-10, 10);
+    // 生成干扰项：在正确答案附近随机偏移
+    const delta = randInt(-5, 5);
     let candidate = correct + delta;
-    if (!Number.isFinite(candidate)) candidate = randInt(0, 100);
-    // 保证格式一致：若为浮点则保留1位
-    if (Math.abs(candidate - Math.round(candidate)) > 0.0001) {
-      candidate = Math.round(candidate * 10) / 10;
-    } else {
-      candidate = Math.round(candidate);
-    }
+    
+    // 确保干扰项与正确答案不同且为正数
+    if (candidate <= 0) candidate = randInt(1, 10);
+    if (candidate === correct) candidate += randInt(1, 3);
+    
     options.add(String(candidate));
   }
+  
   const optsArr = Array.from(options);
   // 随机排列
   shuffleArray(optsArr);
@@ -644,8 +656,17 @@ async function onMessage(message) {
   // 若 message.text 存在且识别出命令，走命令分支
   if (message.text && command) {
     if (command === '/start') {
-      // 要求先验证
-      await sendVerify(chatId);
+      // 检查是否已经通过验证
+      if (await isVerified(chatId)) {
+        // 已经通过验证，发送欢迎消息
+        await sendMessage({
+          chat_id: chatId,
+          text: "你可以用这个机器人跟我对话了。写下您想要发送的消息（图片、视频），我会尽快回复您！"
+        });
+      } else {
+        // 未通过验证，发送验证
+        await sendVerify(chatId);
+      }
       return;
     } else if (command === '/help') {
       let helpMsg = "可用指令列表:\n" +
