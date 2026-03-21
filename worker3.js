@@ -656,7 +656,17 @@ async function onMessage(message) {
   // 若 message.text 存在且识别出命令，走命令分支
   if (message.text && command) {
     if (command === '/start') {
-      // 检查是否已经通过验证
+      // 管理员直接通过，不验证
+      if (isAdmin(chatId)) {
+        await sendMessage({
+          chat_id: chatId,
+          text: "你可以用这个机器人跟我对话了。写下您想要发送的消息（图片、视频），我会尽快回复您！"
+        });
+        // 设置已验证标记，以免后续误触发验证（但管理员一般不会走guest分支）
+        await nfd.put('verified-' + chatId, JSON.stringify(Date.now()));
+        return;
+      }
+      // 普通用户检查是否已经通过验证
       if (await isVerified(chatId)) {
         // 已经通过验证，发送欢迎消息
         await sendMessage({
