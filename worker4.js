@@ -6,7 +6,6 @@ const ADMIN_UID = String(ENV_ADMIN_UID || ''); // 强制为字符串，避免类
 const NOTIFY_INTERVAL = 3600 * 1000;
 const fraudDb = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/fraud.db';
 const notificationUrl = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/notification.txt'
-const startMsgUrl = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/startMessage.md';
 
 const chatSessions = {};  // 存储所有聊天会话的状态
 
@@ -926,20 +925,6 @@ async function onMessage(message) {
   return handleGuestMessage(message);
 }
 
-async function sendDirectMessage(text) {
-  if (currentChatTarget) {
-    return sendMessage({
-      chat_id: currentChatTarget,
-      text: text
-    });
-  } else {
-    return sendMessage({
-      chat_id: ADMIN_UID,
-      text: "没有设置当前聊天目标，请先通过回复某条消息来设置聊天目标。"
-    });
-  }
-}
-
 async function handleGuestMessage(message) {
   const chatId = message.chat.id;
   let isblocked = await nfd.get('isblocked-' + chatId, { type: "json" });
@@ -1012,22 +997,6 @@ async function handleGuestMessage(message) {
     await saveRecentChatTargets(chatId);
   }
   return handleNotify(message);
-}
-
-async function sendPhoto(msg) {
-  return requestTelegram('sendPhoto', makeReqBody(msg))
-}
-
-async function sendVideo(msg) {
-  return requestTelegram('sendVideo', makeReqBody(msg))
-}
-
-async function sendDocument(msg) {
-  return requestTelegram('sendDocument', makeReqBody(msg))
-}
-
-async function sendAudio(msg) {
-  return requestTelegram('sendAudio', makeReqBody(msg))
 }
 
 // -------------------- 回调处理（完整实现，包含会话内确认 & 取消行为） --------------------
@@ -1534,13 +1503,6 @@ async function unblockByIndex(index) {
   return sendMessage({
     chat_id: ADMIN_UID,
     text: `用户 ${nickname} 已解除屏蔽`,
-  });
-}
-
-async function sendPlainText(chatId, text) {
-  return sendMessage({
-    chat_id: chatId,
-    text
   });
 }
 
