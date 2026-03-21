@@ -698,7 +698,12 @@ async function onMessage(message) {
       return listBlockedUsers();
     } else if (command === '/unblock') {
       if (!(await requireAdmin(message))) return;
-      // 两种方式：回复 or /unblock <index>
+
+      // 优先：回复消息方式
+      if (message.reply_to_message) {
+        return handleUnBlock(message);
+      }
+      // 其次：带序号参数
       if (args) {
         const index = parseInt(args.split(' ')[0], 10);
         if (!isNaN(index)) {
@@ -706,9 +711,12 @@ async function onMessage(message) {
         } else {
           return sendMessage({ chat_id: ADMIN_UID, text: '无效的序号。' });
         }
-      } else {
-        // 没有 args — 由 reply_to_message 分支处理
       }
+      // 无任何参数：提示使用方法
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
+      });
     } else if (command === '/list') {
       if (!(await requireAdmin(message))) return;
       // 处理 /list 命令
@@ -832,47 +840,30 @@ async function onMessage(message) {
       } else {
         return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID' });
       }
+    } else if (command === '/block') {
+      if (!(await requireAdmin(message))) return;
+      if (message.reply_to_message) {
+        return handleBlock(message);
+      } else {
+        return sendMessage({
+          chat_id: message.chat.id,
+          text: '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。'
+        });
+      }
+    } else if (command === '/checkblock') {
+      if (!(await requireAdmin(message))) return;
+      if (message.reply_to_message) {
+        return checkBlock(message);
+      } else {
+        return sendMessage({
+          chat_id: message.chat.id,
+          text: '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。'
+        });
+      }
     }
   } // end if command
 
-  // 以下是管理员专用命令（如果命令为回复消息触发）
-  if (message.text && getCommandFromMessage(message) === '/block') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return handleBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。'
-      });
-    }
-  }
-
-  if (message.text && getCommandFromMessage(message) === '/unblock') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return handleUnBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
-      });
-    }
-  }
-
-  if (message.text && getCommandFromMessage(message) === '/checkblock') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return checkBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。'
-      });
-    }
-  }
-
-  // 管理员消息处理
+  // 管理员消息处理（非命令）
   if (isAdmin(message.from && message.from.id ? message.from.id : message.chat.id)) {
     if (message.reply_to_message) {
       const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
@@ -1015,6 +1006,18 @@ async function onCallbackQuery(callbackQuery) {
     // 格式: verify_<chatId>_<optionIndex>
     const chatId = rest[0];
     const selIdx = parseInt(rest[1], 10);
+
+    // ✅ 修复1：校验点击者身份，防止他人代答或攻击
+    if (String(callbackQuery.from.id) !== String(chatId)) {
+      try {
+        await requestTelegram('answerCallbackQuery', makeReqBody({
+          callback_query_id: callbackQuery.id,
+          text: '这不是你的验证题，请勿越权操作。',
+          show_alert: true
+        }));
+      } catch (e) {}
+      return;
+    }
 
     // minimal ack
     try {
