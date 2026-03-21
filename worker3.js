@@ -6,7 +6,6 @@ const ADMIN_UID = String(ENV_ADMIN_UID || ''); // 强制为字符串，避免类
 const NOTIFY_INTERVAL = 3600 * 1000;
 const fraudDb = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/fraud.db';
 const notificationUrl = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/notification.txt'
-const startMsgUrl = 'https://raw.githubusercontent.com/wuyangdaily/nfd/refs/heads/main/data/startMessage.md';
 
 const chatSessions = {};  // 存储所有聊天会话的状态
 
@@ -160,11 +159,11 @@ function generateAdminCommandKeyboard(uid, nicknamePlain) {
 // -------------------- KV 存储操作 --------------------
 
 async function saveChatSession() {
-  await FRAUD_LIST.put('chatSessions', JSON.stringify(chatSessions));
+  await nfd.put('chatSessions', JSON.stringify(chatSessions));
 }
 
 async function loadChatSession() {
-  const storedSessions = await FRAUD_LIST.get('chatSessions');
+  const storedSessions = await nfd.get('chatSessions');
   if (storedSessions) {
     Object.assign(chatSessions, JSON.parse(storedSessions));
   }
@@ -184,7 +183,7 @@ async function generateRecentChatButtons() {
 }
 
 async function saveBlockedUsers() {
-  await FRAUD_LIST.put('blockedUsers', JSON.stringify(blockedUsers));
+  await nfd.put('blockedUsers', JSON.stringify(blockedUsers));
 }
 
 async function searchUserByUID(uid) {
@@ -198,7 +197,7 @@ async function searchUserByUID(uid) {
 }
 
 async function loadBlockedUsers() {
-  const storedList = await FRAUD_LIST.get('blockedUsers');
+  const storedList = await nfd.get('blockedUsers');
   if (storedList) {
     blockedUsers.push(...JSON.parse(storedList));
   }
@@ -206,27 +205,27 @@ async function loadBlockedUsers() {
 
 // 最近聊天目标函数
 async function saveRecentChatTargets(chatId) {
-  let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
+  let recentChatTargets = await nfd.get('recentChatTargets', { type: "json" }) || [];
   recentChatTargets = recentChatTargets.filter(id => id !== chatId.toString());
   recentChatTargets.unshift(chatId.toString());
   if (recentChatTargets.length > 5) {
     recentChatTargets.pop();
   }
-  await FRAUD_LIST.put('recentChatTargets', JSON.stringify(recentChatTargets));
+  await nfd.put('recentChatTargets', JSON.stringify(recentChatTargets));
 }
 
 async function getRecentChatTargets() {
-  let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
+  let recentChatTargets = await nfd.get('recentChatTargets', { type: "json" }) || [];
   return recentChatTargets.map(id => id.toString());
 }
 
 // 保存骗子id到kv空间
 async function saveFraudList() {
-  await FRAUD_LIST.put('localFraudList', JSON.stringify(localFraudList));
+  await nfd.put('localFraudList', JSON.stringify(localFraudList));
 }
 
 async function loadFraudList() {
-  const storedList = await FRAUD_LIST.get('localFraudList');
+  const storedList = await nfd.get('localFraudList');
   if (storedList) {
     localFraudList.push(...JSON.parse(storedList));
   }
@@ -699,7 +698,12 @@ async function onMessage(message) {
       return listBlockedUsers();
     } else if (command === '/unblock') {
       if (!(await requireAdmin(message))) return;
-      // 两种方式：回复 or /unblock <index>
+
+      // 优先：回复消息方式
+      if (message.reply_to_message) {
+        return handleUnBlock(message);
+      }
+      // 其次：带序号参数
       if (args) {
         const index = parseInt(args.split(' ')[0], 10);
         if (!isNaN(index)) {
@@ -707,13 +711,16 @@ async function onMessage(message) {
         } else {
           return sendMessage({ chat_id: ADMIN_UID, text: '无效的序号。' });
         }
-      } else {
-        // 没有 args — 由 reply_to_message 分支处理
       }
+      // 无任何参数：提示使用方法
+      return sendMessage({
+        chat_id: message.chat.id,
+        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
+      });
     } else if (command === '/list') {
       if (!(await requireAdmin(message))) return;
       // 处理 /list 命令
-      const storedList = await FRAUD_LIST.get('localFraudList');
+      const storedList = await nfd.get('localFraudList');
       if (storedList) {
         localFraudList.length = 0;
         localFraudList.push(...JSON.parse(storedList));
@@ -833,47 +840,30 @@ async function onMessage(message) {
       } else {
         return sendMessage({ chat_id: message.chat.id, text: '使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID' });
       }
+    } else if (command === '/block') {
+      if (!(await requireAdmin(message))) return;
+      if (message.reply_to_message) {
+        return handleBlock(message);
+      } else {
+        return sendMessage({
+          chat_id: message.chat.id,
+          text: '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。'
+        });
+      }
+    } else if (command === '/checkblock') {
+      if (!(await requireAdmin(message))) return;
+      if (message.reply_to_message) {
+        return checkBlock(message);
+      } else {
+        return sendMessage({
+          chat_id: message.chat.id,
+          text: '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。'
+        });
+      }
     }
   } // end if command
 
-  // 以下是管理员专用命令（如果命令为回复消息触发）
-  if (message.text && getCommandFromMessage(message) === '/block') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return handleBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。'
-      });
-    }
-  }
-
-  if (message.text && getCommandFromMessage(message) === '/unblock') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return handleUnBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请【 回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取'
-      });
-    }
-  }
-
-  if (message.text && getCommandFromMessage(message) === '/checkblock') {
-    if (!(await requireAdmin(message))) return;
-    if (message.reply_to_message) {
-      return checkBlock(message);
-    } else {
-      return sendMessage({
-        chat_id: message.chat.id,
-        text: '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。'
-      });
-    }
-  }
-
-  // 管理员消息处理
+  // 管理员消息处理（非命令）
   if (isAdmin(message.from && message.from.id ? message.from.id : message.chat.id)) {
     if (message.reply_to_message) {
       const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
@@ -924,20 +914,6 @@ async function onMessage(message) {
 
   // 普通访客消息处理
   return handleGuestMessage(message);
-}
-
-async function sendDirectMessage(text) {
-  if (currentChatTarget) {
-    return sendMessage({
-      chat_id: currentChatTarget,
-      text: text
-    });
-  } else {
-    return sendMessage({
-      chat_id: ADMIN_UID,
-      text: "没有设置当前聊天目标，请先通过回复某条消息来设置聊天目标。"
-    });
-  }
 }
 
 async function handleGuestMessage(message) {
@@ -1014,22 +990,6 @@ async function handleGuestMessage(message) {
   return handleNotify(message);
 }
 
-async function sendPhoto(msg) {
-  return requestTelegram('sendPhoto', makeReqBody(msg))
-}
-
-async function sendVideo(msg) {
-  return requestTelegram('sendVideo', makeReqBody(msg))
-}
-
-async function sendDocument(msg) {
-  return requestTelegram('sendDocument', makeReqBody(msg))
-}
-
-async function sendAudio(msg) {
-  return requestTelegram('sendAudio', makeReqBody(msg))
-}
-
 // -------------------- 回调处理（完整实现，包含会话内确认 & 取消行为） --------------------
 
 async function onCallbackQuery(callbackQuery) {
@@ -1046,6 +1006,18 @@ async function onCallbackQuery(callbackQuery) {
     // 格式: verify_<chatId>_<optionIndex>
     const chatId = rest[0];
     const selIdx = parseInt(rest[1], 10);
+
+    // ✅ 修复1：校验点击者身份，防止他人代答或攻击
+    if (String(callbackQuery.from.id) !== String(chatId)) {
+      try {
+        await requestTelegram('answerCallbackQuery', makeReqBody({
+          callback_query_id: callbackQuery.id,
+          text: '这不是你的验证题，请勿越权操作。',
+          show_alert: true
+        }));
+      } catch (e) {}
+      return;
+    }
 
     // minimal ack
     try {
@@ -1364,7 +1336,7 @@ async function onCallbackQuery(callbackQuery) {
           if (currentChatTarget && String(currentChatTarget) === String(uid)) {
             currentChatTarget = null;
             try {
-              await FRAUD_LIST.delete('currentChatTarget');
+              await nfd.delete('currentChatTarget');
             } catch (e) {
               console.warn('[onCallbackQuery][cancel] delete currentChatTarget from KV failed', e);
             }
@@ -1409,13 +1381,13 @@ async function onCallbackQuery(callbackQuery) {
 
 // 新增：获取当前聊天目标
 async function getCurrentChatTarget() {
-  const session = await FRAUD_LIST.get('currentChatTarget', { type: 'json' });
+  const session = await nfd.get('currentChatTarget', { type: 'json' });
   if (session) {
     const elapsed = Date.now() - session.timestamp;
     if (elapsed < 30 * 60 * 1000) {
       return session.target;
     } else {
-      await FRAUD_LIST.delete('currentChatTarget');
+      await nfd.delete('currentChatTarget');
     }
   }
   return null;
@@ -1426,7 +1398,7 @@ async function setCurrentChatTarget(target) {
     target: target,
     timestamp: Date.now()
   };
-  await FRAUD_LIST.put('currentChatTarget', JSON.stringify(session));
+  await nfd.put('currentChatTarget', JSON.stringify(session));
 }
 
 async function handleNotify(message) {
@@ -1534,13 +1506,6 @@ async function unblockByIndex(index) {
   return sendMessage({
     chat_id: ADMIN_UID,
     text: `用户 ${nickname} 已解除屏蔽`,
-  });
-}
-
-async function sendPlainText(chatId, text) {
-  return sendMessage({
-    chat_id: chatId,
-    text
   });
 }
 
