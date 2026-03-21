@@ -159,11 +159,11 @@ function generateAdminCommandKeyboard(uid, nicknamePlain) {
 // -------------------- KV 存储操作 --------------------
 
 async function saveChatSession() {
-  await FRAUD_LIST.put('chatSessions', JSON.stringify(chatSessions));
+  await nfd.put('chatSessions', JSON.stringify(chatSessions));
 }
 
 async function loadChatSession() {
-  const storedSessions = await FRAUD_LIST.get('chatSessions');
+  const storedSessions = await nfd.get('chatSessions');
   if (storedSessions) {
     Object.assign(chatSessions, JSON.parse(storedSessions));
   }
@@ -183,7 +183,7 @@ async function generateRecentChatButtons() {
 }
 
 async function saveBlockedUsers() {
-  await FRAUD_LIST.put('blockedUsers', JSON.stringify(blockedUsers));
+  await nfd.put('blockedUsers', JSON.stringify(blockedUsers));
 }
 
 async function searchUserByUID(uid) {
@@ -197,7 +197,7 @@ async function searchUserByUID(uid) {
 }
 
 async function loadBlockedUsers() {
-  const storedList = await FRAUD_LIST.get('blockedUsers');
+  const storedList = await nfd.get('blockedUsers');
   if (storedList) {
     blockedUsers.push(...JSON.parse(storedList));
   }
@@ -205,27 +205,27 @@ async function loadBlockedUsers() {
 
 // 最近聊天目标函数
 async function saveRecentChatTargets(chatId) {
-  let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
+  let recentChatTargets = await nfd.get('recentChatTargets', { type: "json" }) || [];
   recentChatTargets = recentChatTargets.filter(id => id !== chatId.toString());
   recentChatTargets.unshift(chatId.toString());
   if (recentChatTargets.length > 5) {
     recentChatTargets.pop();
   }
-  await FRAUD_LIST.put('recentChatTargets', JSON.stringify(recentChatTargets));
+  await nfd.put('recentChatTargets', JSON.stringify(recentChatTargets));
 }
 
 async function getRecentChatTargets() {
-  let recentChatTargets = await FRAUD_LIST.get('recentChatTargets', { type: "json" }) || [];
+  let recentChatTargets = await nfd.get('recentChatTargets', { type: "json" }) || [];
   return recentChatTargets.map(id => id.toString());
 }
 
 // 保存骗子id到kv空间
 async function saveFraudList() {
-  await FRAUD_LIST.put('localFraudList', JSON.stringify(localFraudList));
+  await nfd.put('localFraudList', JSON.stringify(localFraudList));
 }
 
 async function loadFraudList() {
-  const storedList = await FRAUD_LIST.get('localFraudList');
+  const storedList = await nfd.get('localFraudList');
   if (storedList) {
     localFraudList.push(...JSON.parse(storedList));
   }
@@ -712,7 +712,7 @@ async function onMessage(message) {
     } else if (command === '/list') {
       if (!(await requireAdmin(message))) return;
       // 处理 /list 命令
-      const storedList = await FRAUD_LIST.get('localFraudList');
+      const storedList = await nfd.get('localFraudList');
       if (storedList) {
         localFraudList.length = 0;
         localFraudList.push(...JSON.parse(storedList));
@@ -1333,7 +1333,7 @@ async function onCallbackQuery(callbackQuery) {
           if (currentChatTarget && String(currentChatTarget) === String(uid)) {
             currentChatTarget = null;
             try {
-              await FRAUD_LIST.delete('currentChatTarget');
+              await nfd.delete('currentChatTarget');
             } catch (e) {
               console.warn('[onCallbackQuery][cancel] delete currentChatTarget from KV failed', e);
             }
@@ -1378,13 +1378,13 @@ async function onCallbackQuery(callbackQuery) {
 
 // 新增：获取当前聊天目标
 async function getCurrentChatTarget() {
-  const session = await FRAUD_LIST.get('currentChatTarget', { type: 'json' });
+  const session = await nfd.get('currentChatTarget', { type: 'json' });
   if (session) {
     const elapsed = Date.now() - session.timestamp;
     if (elapsed < 30 * 60 * 1000) {
       return session.target;
     } else {
-      await FRAUD_LIST.delete('currentChatTarget');
+      await nfd.delete('currentChatTarget');
     }
   }
   return null;
@@ -1395,7 +1395,7 @@ async function setCurrentChatTarget(target) {
     target: target,
     timestamp: Date.now()
   };
-  await FRAUD_LIST.put('currentChatTarget', JSON.stringify(session));
+  await nfd.put('currentChatTarget', JSON.stringify(session));
 }
 
 async function handleNotify(message) {
