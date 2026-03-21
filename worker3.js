@@ -1407,7 +1407,7 @@ async function handleNotify(message) {
     return sendMessage({
       chat_id: ADMIN_UID,
       parse_mode: 'Markdown',
-      text: `*请注意对方是骗子*！！ \n UID: ${chatId}, 昵称: ${nickname}`
+      text: `*请注意对方是骗子*！！ \n UID: ${chatId}`
     });
   }
   if (enable_notification) {
