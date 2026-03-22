@@ -20,7 +20,16 @@ let pendingMessage = null; // 全局变量保存待发送的消息
 
 // ================= 模式相关变量 =================
 let currentMode = 'private';     // 'private' 或 'group'
-let groupChatId = null;          // 群组ID，需要从环境变量读取或管理员设置
+
+// 兼容不同的环境变量读取方式
+// 优先使用 ENV_GROUP_CHAT_ID（全局），如果不存在则尝试 env.ENV_GROUP_CHAT_ID（Cloudflare Workers 的 env 对象）
+let groupChatId = null;
+if (typeof ENV_GROUP_CHAT_ID !== 'undefined') {
+    groupChatId = ENV_GROUP_CHAT_ID;
+} else if (typeof env !== 'undefined' && env.ENV_GROUP_CHAT_ID) {
+    groupChatId = env.ENV_GROUP_CHAT_ID;
+}
+console.log(`[初始化] groupChatId = ${groupChatId}`); // 日志输出，便于调试
 
 // 在程序启动时加载会话状态
 loadChatSession();
@@ -245,18 +254,12 @@ async function loadModeConfig() {
   } else {
     currentMode = 'private';
   }
-  const gid = await nfd.get('groupChatId');
-  if (gid) groupChatId = gid;
-  // 如果环境变量中有预设，优先使用环境变量
-  if (ENV_GROUP_CHAT_ID) {
-    groupChatId = ENV_GROUP_CHAT_ID;
-    await nfd.put('groupChatId', groupChatId);
-  }
+  // groupChatId 已从环境变量初始化，不再从 KV 读取
 }
 
 async function saveModeConfig() {
   await nfd.put('mode', currentMode);
-  if (groupChatId) await nfd.put('groupChatId', groupChatId);
+  // 不再保存 groupChatId 到 KV
 }
 
 // ================= 群组话题管理 =================
@@ -331,7 +334,7 @@ async function setBotCommands() {
     { command: 'start', description: '启动机器人会话' },
     { command: 'help', description: '显示帮助信息' },
     { command: 'mode', description: '切换私聊/群组模式 (仅管理员，无参数自动切换，带参数指定模式)' },
-    { command: 'setgroup', description: '设置群组ID (仅管理员)' },
+    { command: 'setgroup', description: '设置群组ID (仅管理员，临时生效，重启后恢复环境变量)' },
     { command: 'search', description: '查看指定uid用户最新昵称 (仅管理员)' },
     { command: 'block', description: '屏蔽用户 (仅管理员)' },
     { command: 'unblock', description: '解除屏蔽用户 (仅管理员)' },
@@ -720,13 +723,7 @@ async function onMessage(message) {
           console.log('[群组回复] 复制媒体消息给用户', targetUserId, '结果:', sendRes);
         }
         if (sendRes && sendRes.ok) {
-          // 成功发送，不添加提示（已取消）
-          // await sendMessage({
-          //   chat_id: groupChatId,
-          //   message_thread_id: message.message_thread_id,
-          //   text: '✅ 已发送给用户',
-          //   reply_to_message_id: message.message_id
-          // });
+          // 成功发送，不添加提示
         } else {
           await sendMessage({
             chat_id: groupChatId,
@@ -795,7 +792,7 @@ async function onMessage(message) {
                     "/start - 启动机器人会话（需先验证）\n" +
                     "/help - 显示帮助信息\n" +
                     "/mode - 切换私聊/群组模式 (仅管理员，无参数自动切换，带参数指定模式)\n" +
-                    "/setgroup - 设置群组ID (仅管理员)\n" +
+                    "/setgroup - 设置群组ID (仅管理员，临时生效，重启后恢复环境变量)\n" +
                     "/search - 查看指定uid用户最新昵称 (仅管理员)\n" +
                     "/block - 屏蔽用户 (仅管理员)\n" +
                     "/unblock - 解除屏蔽用户 (仅管理员)\n" +
@@ -847,8 +844,7 @@ async function onMessage(message) {
         return sendMessage({ chat_id: message.chat.id, text: '使用方法: /setgroup 群组ID' });
       }
       groupChatId = newGroupId;
-      await saveModeConfig();
-      await sendMessage({ chat_id: message.chat.id, text: `群组ID已设置为: ${groupChatId}` });
+      await sendMessage({ chat_id: message.chat.id, text: `群组ID已临时设置为: ${groupChatId}（重启后恢复为环境变量值）` });
       return;
     } else if (command === '/blocklist') {
       if (!(await requireAdmin(message))) return;
