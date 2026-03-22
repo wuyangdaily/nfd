@@ -299,8 +299,11 @@ async function sendAdminButtonsInTopic(topicId, userId, nicknamePlain, nicknameE
     ...generateAdminCommandKeyboard(userId, nicknamePlain)
   });
   if (sent.ok && sent.result) {
-    // 保存映射，以便管理员回复此消息时能找到用户
+    // 保存映射，以便管理员回复此消息时能找到用户（备用）
     await nfd.put('group_msg_map_' + sent.result.message_id, userId);
+    console.log(`[映射保存] 管理按钮消息 ${sent.result.message_id} -> 用户 ${userId}`);
+  } else {
+    console.error('[映射保存] 管理按钮消息发送失败，无法保存映射');
   }
 }
 
@@ -316,7 +319,7 @@ async function forwardUserMessageToTopic(userId, topicId, message) {
   if (copyReq.ok && copyReq.result) {
     const copiedMsgId = copyReq.result.message_id;
     await nfd.put('group_msg_map_' + copiedMsgId, userId);
-    console.log(`[转发] 用户 ${userId} 的消息已复制到话题 ${topicId}，消息ID ${copiedMsgId}`);
+    console.log(`[映射保存] 用户消息副本 ${copiedMsgId} -> 用户 ${userId}`);
   } else {
     console.error('[转发] 复制消息失败:', copyReq);
   }
@@ -683,47 +686,80 @@ async function onMessage(message) {
 
   // ================= 处理群组模式下的管理员回复 =================
   if (groupChatId && String(chatId) === String(groupChatId) && isAdmin(message.from && message.from.id)) {
-    if (message.reply_to_message) {
+    let targetUserId = null;
+
+    // 优先通过话题ID获取用户
+    if (message.message_thread_id) {
+      targetUserId = await nfd.get('topic_user_' + message.message_thread_id, { type: 'json' });
+      if (targetUserId) {
+        console.log(`[群组回复] 通过话题ID ${message.message_thread_id} 找到用户 ${targetUserId}`);
+      } else {
+        console.log(`[群组回复] 话题ID ${message.message_thread_id} 未找到对应用户`);
+      }
+    }
+
+    // 如果话题ID未找到，且消息是回复，尝试通过回复消息的映射获取
+    if (!targetUserId && message.reply_to_message) {
       const repliedMsgId = message.reply_to_message.message_id;
-      const userId = await nfd.get('group_msg_map_' + repliedMsgId, { type: 'json' });
-      console.log('[群组回复] 查找映射 repliedMsgId=', repliedMsgId, ' userId=', userId);
-      if (userId) {
-        try {
-          if (message.text) {
-            const sendRes = await sendMessage({ chat_id: userId, text: message.text });
-            console.log('[群组回复] 发送文本消息给用户', userId, '结果:', sendRes);
-          } else if (message.photo || message.video || message.document || message.audio) {
-            const copyRes = await copyMessage({
-              chat_id: userId,
-              from_chat_id: groupChatId,
-              message_id: message.message_id
-            });
-            console.log('[群组回复] 复制媒体消息给用户', userId, '结果:', copyRes);
-          }
-          // 可选：在话题中回复一个已发送的提示
+      targetUserId = await nfd.get('group_msg_map_' + repliedMsgId, { type: 'json' });
+      console.log(`[群组回复] 通过回复消息映射 ${repliedMsgId} 找到用户 ${targetUserId}`);
+    }
+
+    if (targetUserId) {
+      try {
+        let sendRes;
+        if (message.text) {
+          sendRes = await sendMessage({ chat_id: targetUserId, text: message.text });
+          console.log('[群组回复] 发送文本消息给用户', targetUserId, '结果:', sendRes);
+        } else if (message.photo || message.video || message.document || message.audio) {
+          sendRes = await copyMessage({
+            chat_id: targetUserId,
+            from_chat_id: groupChatId,
+            message_id: message.message_id
+          });
+          console.log('[群组回复] 复制媒体消息给用户', targetUserId, '结果:', sendRes);
+        }
+        if (sendRes && sendRes.ok) {
+          // 成功发送，不添加提示（已取消）
           // await sendMessage({
           //   chat_id: groupChatId,
           //   message_thread_id: message.message_thread_id,
           //   text: '✅ 已发送给用户',
           //   reply_to_message_id: message.message_id
           // });
-        } catch (err) {
-          console.error('[群组回复] 发送失败:', err);
+        } else {
           await sendMessage({
             chat_id: groupChatId,
             message_thread_id: message.message_thread_id,
-            text: `❌ 发送失败: ${err.message}`,
+            text: `❌ 发送失败: ${sendRes ? JSON.stringify(sendRes) : '未知错误'}`,
             reply_to_message_id: message.message_id
           });
         }
-        return;
-      } else {
-        console.log('[群组回复] 未找到映射，可能不是用户消息');
-        // 可以忽略，或者回复一个提示
-        // return;
+      } catch (err) {
+        console.error('[群组回复] 发送失败:', err);
+        await sendMessage({
+          chat_id: groupChatId,
+          message_thread_id: message.message_thread_id,
+          text: `❌ 发送失败: ${err.message}`,
+          reply_to_message_id: message.message_id
+        });
       }
+      return;
     } else {
-      // 不是回复消息，忽略或提示
+      // 无法确定目标用户
+      let errorMsg = '⚠️ 无法确定要发送给哪位用户。\n\n';
+      if (message.message_thread_id) {
+        errorMsg += `当前话题ID: ${message.message_thread_id}\n未找到对应的用户映射。\n\n`;
+      } else {
+        errorMsg += '当前消息不在话题中（缺少 message_thread_id）。\n\n';
+      }
+      errorMsg += '请确保：\n1️⃣ 消息发送在机器人创建的话题内\n2️⃣ 话题已正确关联用户（用户曾发过消息）\n3️⃣ 如问题持续，请让用户重新发一条消息以重建映射。';
+      await sendMessage({
+        chat_id: groupChatId,
+        message_thread_id: message.message_thread_id,
+        text: errorMsg,
+        reply_to_message_id: message.message_id
+      });
       return;
     }
   }
