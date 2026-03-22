@@ -1012,7 +1012,7 @@ async function onCallbackQuery(callbackQuery) {
       try {
         await requestTelegram('answerCallbackQuery', makeReqBody({
           callback_query_id: callbackQuery.id,
-          text: '这不是你的验证题，请勿越权操作。',
+          text: '不要乱动别人的操作哟👻',
           show_alert: true
         }));
       } catch (e) {}
