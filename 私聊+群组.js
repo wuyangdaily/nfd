@@ -132,13 +132,15 @@ function generateKeyboard(options) {
 }
 
 /**
- * 生成管理员命令键盘
+ * 生成管理员命令键盘（支持两种模式）
  * uid: 用户 id（字符串或数字）
  * nicknamePlain: 纯文本昵称（不做 Markdown 转义），用于按钮显示
- * 按钮文本为中文显示（callback_data 保持 action_uid）
+ * mode: 'private' 或 'group'，决定底部按钮布局
+ * 
+ * 修改点：私聊模式下，“选择 xxx”和“取消 xxx”各占一行
  */
-function generateAdminCommandKeyboard(uid, nicknamePlain) {
-  const rows = [
+function generateAdminCommandKeyboard(uid, nicknamePlain, mode = 'private') {
+  const commonRows = [
     [
       { text: '查看昵称', callback_data: `search_${uid}` },
       { text: '屏蔽用户', callback_data: `block_${uid}` }
@@ -154,20 +156,23 @@ function generateAdminCommandKeyboard(uid, nicknamePlain) {
     [
       { text: '查看骗子列表', callback_data: `list_${uid}` },
       { text: '查看屏蔽列表', callback_data: `blocklist_${uid}` }
-    ],
-    [
-      { text: `选择 ${nicknamePlain}`, callback_data: `select_${uid}` }
-    ],
-    [
-      { text: `取消 ${nicknamePlain}`, callback_data: `cancel_${uid}` }
     ]
   ];
 
-  return {
-    reply_markup: {
-      inline_keyboard: rows
-    }
-  };
+  let additionalRows;
+  if (mode === 'group') {
+    // 群组模式：一个“结束会话”按钮
+    additionalRows = [[{ text: '结束会话', callback_data: `end_${uid}` }]];
+  } else {
+    // 私聊模式：“选择 xxx”和“取消 xxx”各占一行
+    additionalRows = [
+      [{ text: `选择 ${nicknamePlain}`, callback_data: `select_${uid}` }],
+      [{ text: `取消 ${nicknamePlain}`, callback_data: `cancel_${uid}` }]
+    ];
+  }
+
+  const rows = [...commonRows, ...additionalRows];
+  return { reply_markup: { inline_keyboard: rows } };
 }
 
 // -------------------- KV 存储操作 --------------------
@@ -298,7 +303,7 @@ async function sendAdminButtonsInTopic(topicId, userId, nicknamePlain, nicknameE
     message_thread_id: topicId,
     parse_mode: 'MarkdownV2',
     text: text,
-    ...generateAdminCommandKeyboard(userId, nicknamePlain)
+    ...generateAdminCommandKeyboard(userId, nicknamePlain, 'group') // 群组模式使用 group 布局
   });
   if (sent.ok && sent.result) {
     // 保存映射，以便管理员回复此消息时能找到用户（备用）
@@ -1157,7 +1162,7 @@ async function handleGuestMessage(message) {
             chat_id: ADMIN_UID,
             parse_mode: 'MarkdownV2',
             text: messageText,
-            ...generateAdminCommandKeyboard(userId, nicknamePlain)
+            ...generateAdminCommandKeyboard(userId, nicknamePlain, 'private') // 私聊模式使用 private 布局
           });
           chatTargetUpdated = true;
         }
@@ -1460,6 +1465,49 @@ async function onCallbackQuery(callbackQuery) {
         const sendOpts = { chat_id: targetChatId, text };
         if (targetThreadId) sendOpts.message_thread_id = targetThreadId;
         await sendMessage(sendOpts);
+        break;
+      }
+      case 'end': {
+        const targetUid = uid;                // 用户 ID
+        const chatId = message.chat.id;       // 群组 ID
+        const topicId = message.message_thread_id; // 当前话题 ID
+
+        if (!topicId) {
+          await sendMessage({
+            chat_id: chatId,
+            text: '无法获取话题 ID，请确认消息是否位于话题中。'
+          });
+          break;
+        }
+
+        // 调用 Telegram API 删除话题
+        const delRes = await requestTelegram('deleteForumTopic', makeReqBody({
+          chat_id: chatId,
+          message_thread_id: topicId
+        }));
+
+        if (delRes.ok) {
+          // 清理 KV 中的映射
+          await nfd.delete('user_topic_' + targetUid);      // 用户 -> 话题
+          await nfd.delete('topic_user_' + topicId);        // 话题 -> 用户
+          await nfd.delete('topic_initialized_' + topicId); // 话题初始化标记
+
+          // 可选：删除原来的管理按钮消息
+          try {
+            await requestTelegram('deleteMessage', makeReqBody({
+              chat_id: chatId,
+              message_id: message.message_id
+            }));
+          } catch (e) {
+            console.warn('[deleteMessage] 删除原消息失败', e);
+          }
+          // 注意：不再发送私聊通知
+        } else {
+          await sendMessage({
+            chat_id: chatId,
+            text: `删除话题失败: ${JSON.stringify(delRes)}`
+          });
+        }
         break;
       }
       case 'cancel': {
