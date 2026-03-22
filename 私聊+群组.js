@@ -306,11 +306,10 @@ async function sendAdminButtonsInTopic(topicId, userId, nicknamePlain, nicknameE
     ...generateAdminCommandKeyboard(userId, nicknamePlain, 'group') // 群组模式使用 group 布局
   });
   if (sent.ok && sent.result) {
-    // 保存映射，以便管理员回复此消息时能找到用户（备用）
-    await nfd.put('group_msg_map_' + sent.result.message_id, userId);
-    console.log(`[映射保存] 管理按钮消息 ${sent.result.message_id} -> 用户 ${userId}`);
+    // 不再保存 group_msg_map，因为已经有 topic_user 映射
+    console.log(`[映射保存] 管理按钮消息发送成功，消息ID: ${sent.result.message_id}`);
   } else {
-    console.error('[映射保存] 管理按钮消息发送失败，无法保存映射');
+    console.error('[映射保存] 管理按钮消息发送失败');
   }
 }
 
@@ -325,8 +324,8 @@ async function forwardUserMessageToTopic(userId, topicId, message) {
   });
   if (copyReq.ok && copyReq.result) {
     const copiedMsgId = copyReq.result.message_id;
-    await nfd.put('group_msg_map_' + copiedMsgId, userId);
-    console.log(`[映射保存] 用户消息副本 ${copiedMsgId} -> 用户 ${userId}`);
+    // 不再保存 group_msg_map，因为已经有 topic_user 映射
+    console.log(`[映射保存] 用户消息副本 ${copiedMsgId} 已转发，不保存映射`);
   } else {
     console.error('[转发] 复制消息失败:', copyReq);
   }
@@ -729,7 +728,7 @@ async function onMessage(message) {
   if (groupChatId && String(chatId) === String(groupChatId) && isAdmin(fromId)) {
     let targetUserId = null;
 
-    // 优先通过话题ID获取用户
+    // 通过话题ID获取用户（唯一方式，不再使用 group_msg_map）
     if (message.message_thread_id) {
       targetUserId = await nfd.get('topic_user_' + message.message_thread_id, { type: 'json' });
       if (targetUserId) {
@@ -737,13 +736,6 @@ async function onMessage(message) {
       } else {
         console.log(`[群组回复] 话题ID ${message.message_thread_id} 未找到对应用户`);
       }
-    }
-
-    // 如果话题ID未找到，且消息是回复，尝试通过回复消息的映射获取
-    if (!targetUserId && message.reply_to_message) {
-      const repliedMsgId = message.reply_to_message.message_id;
-      targetUserId = await nfd.get('group_msg_map_' + repliedMsgId, { type: 'json' });
-      console.log(`[群组回复] 通过回复消息映射 ${repliedMsgId} 找到用户 ${targetUserId}`);
     }
 
     if (targetUserId) {
@@ -1043,7 +1035,8 @@ async function onMessage(message) {
   // 管理员消息处理（非命令）
   if (isAdmin(fromId)) {
     if (message.reply_to_message) {
-      const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
+      const repliedMsgId = message.reply_to_message.message_id;
+      const guestChatId = await nfd.get('msg-map-' + repliedMsgId, { type: "json" });
       console.log("guestChatId:", guestChatId);
       if (guestChatId) {
         currentChatTarget = guestChatId;
@@ -1062,6 +1055,8 @@ async function onMessage(message) {
             message_id: message.message_id,
           });
         }
+        // 使用后立即删除映射，避免累积
+        await nfd.delete('msg-map-' + repliedMsgId);
       }
     } else {
       if (!currentChatTarget) {
