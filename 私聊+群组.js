@@ -136,8 +136,8 @@ function generateKeyboard(options) {
  * uid: 用户 id（字符串或数字）
  * nicknamePlain: 纯文本昵称（不做 Markdown 转义），用于按钮显示
  * mode: 'private' 或 'group'，决定底部按钮布局
- * 
- * 修改点：私聊模式下，“选择 xxx”和“取消 xxx”各占一行
+ * 私聊模式：选择和取消按钮各占一行
+ * 群组模式：结束会话按钮占一行
  */
 function generateAdminCommandKeyboard(uid, nicknamePlain, mode = 'private') {
   const commonRows = [
@@ -752,7 +752,8 @@ async function onMessage(message) {
         if (message.text) {
           sendRes = await sendMessage({ chat_id: targetUserId, text: message.text });
           console.log('[群组回复] 发送文本消息给用户', targetUserId, '结果:', sendRes);
-        } else if (message.photo || message.video || message.document || message.audio) {
+        } else {
+          // 任何非文本消息（语音、视频、贴纸、动画等）都使用 copyMessage 转发
           sendRes = await copyMessage({
             chat_id: targetUserId,
             from_chat_id: groupChatId,
@@ -1052,7 +1053,8 @@ async function onMessage(message) {
             chat_id: guestChatId,
             text: message.text,
           });
-        } else if (message.photo || message.video || message.document || message.audio) {
+        } else {
+          // 任何非文本消息都使用 copyMessage 转发
           console.log("Copying media message:", message.message_id);
           await copyMessage({
             chat_id: guestChatId,
@@ -1076,7 +1078,8 @@ async function onMessage(message) {
           chat_id: currentChatTarget,
           text: message.text,
         });
-      } else if (message.photo || message.video || message.document || message.audio) {
+      } else {
+        // 任何非文本消息都使用 copyMessage 转发
         console.log("Copying media message:", message.message_id);
         await copyMessage({
           chat_id: currentChatTarget,
@@ -1314,7 +1317,8 @@ async function onCallbackQuery(callbackQuery) {
             try {
               if (pendingMessage.text) {
                 await sendMessage({ chat_id: currentChatTarget, text: pendingMessage.text });
-              } else if (pendingMessage.photo || pendingMessage.video || pendingMessage.document || pendingMessage.audio) {
+              } else {
+                // 任何非文本消息都使用 copyMessage 转发
                 await copyMessage({
                   chat_id: currentChatTarget,
                   from_chat_id: ADMIN_UID,
