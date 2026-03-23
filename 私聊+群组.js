@@ -23,11 +23,11 @@ let currentMode = 'private';     // 'private' 或 'group'
 
 // 兼容不同的环境变量读取方式
 let groupChatId = null;
-if (typeof ENV_GROUP_CHAT_ID !== 'undefined') {
-    groupChatId = ENV_GROUP_CHAT_ID;
-} else if (typeof env !== 'undefined' && env.ENV_GROUP_CHAT_ID) {
-    groupChatId = env.ENV_GROUP_CHAT_ID;
-}
+
+// 持久化 KV 键名
+const GROUP_CHAT_ID_KV_KEY = 'group_chat_id'; // 用于持久化群组 ID
+let configLoadedPromise = null; // 用于确保配置加载完成
+
 console.log(`[初始化] groupChatId = ${groupChatId}`);
 
 // 在程序启动时加载会话状态
@@ -36,7 +36,7 @@ loadChatSession();
 loadBlockedUsers();
 // 在程序启动时加载骗子列表
 loadFraudList();
-// 加载模式配置
+// 加载模式配置（异步，但为了顺序执行，不等待）
 loadModeConfig();
 
 function escapeMarkdown(text) {
@@ -252,18 +252,41 @@ async function loadFraudList() {
 
 // ================= 模式配置加载与保存 =================
 async function loadModeConfig() {
+  // 加载模式
   const mode = await nfd.get('mode');
   if (mode === 'group') {
     currentMode = 'group';
   } else {
     currentMode = 'private';
   }
-  // groupChatId 已从环境变量初始化，不再从 KV 读取
+
+  // 加载群组 ID：优先环境变量，否则 KV 中保存的值
+  let loadedGroupId = null;
+  if (typeof ENV_GROUP_CHAT_ID !== 'undefined' && ENV_GROUP_CHAT_ID) {
+    loadedGroupId = ENV_GROUP_CHAT_ID;
+  } else if (typeof env !== 'undefined' && env.ENV_GROUP_CHAT_ID) {
+    loadedGroupId = env.ENV_GROUP_CHAT_ID;
+  } else {
+    const savedGroupId = await nfd.get(GROUP_CHAT_ID_KV_KEY);
+    if (savedGroupId) {
+      loadedGroupId = savedGroupId;
+    }
+  }
+  groupChatId = loadedGroupId || null;
+  console.log(`[loadModeConfig] currentMode=${currentMode}, groupChatId=${groupChatId}`);
 }
 
 async function saveModeConfig() {
   await nfd.put('mode', currentMode);
-  // 不再保存 groupChatId 到 KV
+  // 注意：groupChatId 的保存由 /setgroup 命令负责，此处不覆盖
+}
+
+// 确保配置加载完成（用于首次请求）
+async function ensureConfigLoaded() {
+  if (!configLoadedPromise) {
+    configLoadedPromise = loadModeConfig();
+  }
+  await configLoadedPromise;
 }
 
 // ================= 群组话题管理 =================
@@ -399,6 +422,9 @@ async function handleWebhook(event) {
   if (event.request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== SECRET) {
     return new Response('Unauthorized', { status: 403 })
   }
+
+  // 确保配置加载完成（包括 groupChatId 和 currentMode）
+  await ensureConfigLoaded();
 
   const update = await event.request.json()
   try { console.log('[onUpdate] incoming update:', JSON.stringify(update)); } catch(e){}
@@ -879,7 +905,8 @@ async function onMessage(message) {
         return sendMessage({ chat_id: chatId, text: '使用方法: /setgroup 群组ID' });
       }
       groupChatId = newGroupId;
-      await sendMessage({ chat_id: chatId, text: `群组ID已临时设置为: ${groupChatId}（重启后恢复为环境变量值）` });
+      await nfd.put(GROUP_CHAT_ID_KV_KEY, newGroupId);   // 持久化
+      await sendMessage({ chat_id: chatId, text: `群组ID已设置为: ${groupChatId}（持久化保存）` });
       return;
     } else if (command === '/blocklist') {
       if (!(await requireAdmin(message))) return;
