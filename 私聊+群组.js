@@ -290,11 +290,12 @@ async function ensureConfigLoaded() {
 }
 
 // ================= 群组话题管理 =================
-// 创建论坛话题
-async function createForumTopic(chatId, name) {
+// 创建论坛话题（话题名称格式：昵称 | UID）
+async function createForumTopic(chatId, name, userId) {
+  const topicName = `${name} | ${userId}`;
   const response = await requestTelegram('createForumTopic', makeReqBody({
     chat_id: chatId,
-    name: name
+    name: topicName
   }));
   if (response.ok && response.result) {
     return response.result.message_thread_id;
@@ -308,7 +309,8 @@ async function createForumTopic(chatId, name) {
 async function ensureUserTopic(userId, displayName) {
   let topicId = await nfd.get('user_topic_' + userId, { type: 'json' });
   if (!topicId && groupChatId) {
-    topicId = await createForumTopic(groupChatId, displayName);
+    // 创建话题，使用格式化名称
+    topicId = await createForumTopic(groupChatId, displayName, userId);
     if (topicId) {
       await nfd.put('user_topic_' + userId, JSON.stringify(topicId));
       await nfd.put('topic_user_' + topicId, userId);
