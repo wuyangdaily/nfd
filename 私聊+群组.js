@@ -429,16 +429,18 @@ async function handleWebhook(event) {
   const update = await event.request.json()
   try { console.log('[onUpdate] incoming update:', JSON.stringify(update)); } catch(e){}
 
-  event.waitUntil(onUpdate(update))
+  // 传递 event 对象，以便在需要时使用 waitUntil 进行异步操作
+  event.waitUntil(onUpdate(update, event))
 
   return new Response('Ok')
 }
 
-async function onUpdate(update) {
+// 修改 onUpdate 签名，接收 event 参数
+async function onUpdate(update, event) {
   if (update.message) {
-    await onMessage(update.message);
+    await onMessage(update.message, event);
   } else if (update.callback_query) {
-    await onCallbackQuery(update.callback_query);
+    await onCallbackQuery(update.callback_query, event);
   }
 }
 
@@ -726,7 +728,8 @@ async function isVerified(chatId) {
 
 // -------------------- 消息处理 --------------------
 
-async function onMessage(message) {
+// 修改 onMessage 签名，接收 event 参数
+async function onMessage(message, event) {
   try { console.log('[onMessage] raw message:', JSON.stringify(message)); } catch(e){}
 
   const fromId = message.from ? message.from.id : null;
@@ -808,12 +811,32 @@ async function onMessage(message) {
         errorMsg += '当前消息不在话题中（缺少 message_thread_id）。\n\n';
       }
       errorMsg += '请确保：\n1️⃣ 消息发送在机器人创建的话题内\n2️⃣ 话题已正确关联用户（用户曾发过消息）\n3️⃣ 如问题持续，请让用户重新发一条消息以重建映射。';
-      await sendMessage({
+      
+      // 发送错误提示，并安排5秒后自动删除
+      const sent = await sendMessage({
         chat_id: groupChatId,
         message_thread_id: message.message_thread_id,
         text: errorMsg,
         reply_to_message_id: message.message_id
       });
+      
+      if (sent && sent.ok && sent.result) {
+        const errorMsgId = sent.result.message_id;
+        if (event && event.waitUntil) {
+          event.waitUntil((async () => {
+            await new Promise(resolve => setTimeout(resolve, 5000)); // 5秒后删除
+            try {
+              await requestTelegram('deleteMessage', makeReqBody({
+                chat_id: groupChatId,
+                message_id: errorMsgId
+              }));
+              console.log(`[自动删除] 已删除错误提示消息 ${errorMsgId}`);
+            } catch (e) {
+              console.error('[自动删除] 删除错误提示消息失败', e);
+            }
+          })());
+        }
+      }
       return;
     }
   }
@@ -1202,7 +1225,8 @@ async function handleGuestMessage(message) {
 
 // -------------------- 回调处理 --------------------
 
-async function onCallbackQuery(callbackQuery) {
+// 修改 onCallbackQuery 签名，接收 event 参数（为保持一致性，但不在此处使用）
+async function onCallbackQuery(callbackQuery, event) {
   const data = callbackQuery.data;
   const message = callbackQuery.message;
 
