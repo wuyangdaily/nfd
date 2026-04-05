@@ -2251,41 +2251,61 @@ async function onCallbackQuery(callbackQuery, event) {
           await saveRecentChatTargets(selectedChatId);
           chatSessions[ADMIN_UID] = { target: selectedChatId, timestamp: Date.now() };
           await saveChatSession();
-          const confirmationText = `已选择当前聊天目标：${namePlain}${selectedChatId}`;
+          const confirmationText = `已选择当前聊天目标：${namePlain} (${selectedChatId})`;
           const sendOpts = { chat_id: targetChatId, text: confirmationText };
           if (targetThreadId) sendOpts.message_thread_id = targetThreadId;
           if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
           await sendMessage(sendOpts);
-          const pending = await consumePendingMessage();
-          if (pending) {
-            try {
-              if (pending.text) {
+        } else {
+          const confirmationText = `已选择当前聊天目标：${namePlain} (${selectedChatId})`;
+          const sendOpts = { chat_id: targetChatId, text: confirmationText };
+          if (targetThreadId) sendOpts.message_thread_id = targetThreadId;
+          if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
+          await sendMessage(sendOpts);
+        }
+
+        // 处理待转发消息
+        const pending = await consumePendingMessage();
+        if (pending) {
+          let forwardSuccess = false;
+          let errorMsg = '';
+          try {
+            // 尝试复制原消息（支持任何类型）
+            const copyRes = await copyMessage({
+              chat_id: selectedChatId,
+              from_chat_id: pending.chat_id,
+              message_id: pending.message_id
+            });
+            if (copyRes.ok && copyRes.result) {
+              const msgType = pending.text ? 'text' : (pending.hasMedia ? 'media' : 'unknown');
+              await saveMessageMapping(ADMIN_UID, pending.message_id, selectedChatId, copyRes.result.message_id, msgType, null, false);
+              forwardSuccess = true;
+            } else {
+              errorMsg = `copyMessage 失败: ${JSON.stringify(copyRes)}`;
+              console.error('[转发待发消息]', errorMsg);
+              // 回退：纯文本且无媒体时尝试直接发送文本
+              if (pending.text && !pending.hasMedia) {
                 const sendRes = await sendMessage({ chat_id: selectedChatId, text: pending.text });
                 if (sendRes.ok && sendRes.result) {
                   await saveMessageMapping(ADMIN_UID, pending.message_id, selectedChatId, sendRes.result.message_id, 'text', null, false);
+                  forwardSuccess = true;
+                } else {
+                  errorMsg = `sendMessage 也失败: ${JSON.stringify(sendRes)}`;
                 }
-              } else if (pending.hasMedia) {
-                await sendMessage({ chat_id: ADMIN_UID, text: '待转发的媒体消息需要您手动重新发送。' });
               }
-              await sendMessage({
-                chat_id: ADMIN_UID,
-                text: "消息已成功转发给目标用户。",
-                reply_to_message_id: pending.message_id
-              });
-            } catch (error) {
-              await sendMessage({
-                chat_id: ADMIN_UID,
-                text: "消息转发失败，请重试。",
-                reply_to_message_id: pending.message_id
-              });
             }
+          } catch (err) {
+            errorMsg = `异常: ${err.message}`;
+            console.error('[转发待发消息]', err);
           }
-        } else {
-          const confirmationText = `已选择当前聊天目标：${namePlain}${selectedChatId}`;
-          const sendOpts = { chat_id: targetChatId, text: confirmationText };
-          if (targetThreadId) sendOpts.message_thread_id = targetThreadId;
-          if (message && message.message_id) sendOpts.reply_to_message_id = message.message_id;
-          await sendMessage(sendOpts);
+          const resultText = forwardSuccess
+            ? "✅ 消息已成功转发给目标用户。"
+            : `❌ 消息转发失败，请手动重新发送。\n原因: ${errorMsg}`;
+          await sendMessage({
+            chat_id: ADMIN_UID,
+            text: resultText,
+            reply_to_message_id: pending.message_id
+          });
         }
         break;
       }
