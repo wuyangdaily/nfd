@@ -1282,17 +1282,15 @@ async function onMessage(message, event) {
       const userId = fromId;
       if (isAdmin(userId)) {
         const startMsg = await getStartMessage();
-        await sendReplyAndDelete(event, userId, message.message_id, startMsg);
+        await sendMessage({ chat_id: userId, text: startMsg });
         await setVerified(userId);
         return;
       }
       if (await isVerified(userId)) {
         const startMsg = await getStartMessage();
-        await sendReplyAndDelete(event, userId, message.message_id, startMsg);
+        await sendMessage({ chat_id: userId, text: startMsg });
         await initUserTopicIfNeeded(userId);
       } else {
-        // 未验证用户：删除命令消息，但保留验证消息（不删除）
-        scheduleDelete(event, userId, message.message_id, 3000);
         await sendVerify(userId);
       }
       return;
