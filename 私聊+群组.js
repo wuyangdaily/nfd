@@ -876,23 +876,29 @@ async function requireAdmin(message, event, commandMsgId) {
   }
 
   const chatTarget = message && message.chat && message.chat.id ? message.chat.id : senderId;
+  const threadId = message.message_thread_id;
 
-  const res = await sendMessage({ chat_id: chatTarget, text: '此命令仅限管理员使用。' });
-  if (res && res.ok && res.result) {
-    const replyMsgId = res.result.message_id;
-    // 自动删除命令消息和提示消息
-    if (event && commandMsgId) {
-      scheduleDeletion(chatTarget, [commandMsgId, replyMsgId], 3000, event);
-    } else if (event && !commandMsgId && message && message.message_id) {
-      scheduleDeletion(chatTarget, [message.message_id, replyMsgId], 3000, event);
-    }
+  const sendOptions = {
+    chat_id: chatTarget,
+    text: '此命令仅限管理员使用。',
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+
+  const res = await sendMessage(sendOptions);
+  if (res && res.ok && res.result && event) {
+    scheduleDeletion(chatTarget, [commandMsgId, res.result.message_id], 3000, event);
   } else {
     debugLog('[requireAdmin] send to chat failed, trying fallback. res=', res);
     if (senderId && String(senderId) !== String(chatTarget)) {
       try {
-        const fallbackRes = await sendMessage({ chat_id: senderId, text: '此命令仅限管理员使用。' });
-        if (fallbackRes && fallbackRes.ok && fallbackRes.result && event && message && message.message_id) {
-          scheduleDeletion(senderId, [message.message_id, fallbackRes.result.message_id], 3000, event);
+        const fallbackRes = await sendMessage({
+          chat_id: senderId,
+          text: '此命令仅限管理员使用。',
+          reply_to_message_id: commandMsgId
+        });
+        if (fallbackRes && fallbackRes.ok && fallbackRes.result && event) {
+          scheduleDeletion(senderId, [commandMsgId, fallbackRes.result.message_id], 3000, event);
         }
       } catch (e2) {
         console.error('[requireAdmin] fallback sendMessage failed', e2);
@@ -1294,12 +1300,20 @@ async function onMessage(message, event) {
   const command = getCommandFromMessage(message);
   const args = message.text ? message.text.slice((command||'').length).trim() : '';
   const commandMsgId = message.message_id;
+  const threadId = message.message_thread_id;
 
   debugLog('onMessage command=', command, 'args=', args, 'from=', fromId);
 
-  // 辅助函数：发送回复并自动删除命令和回复（用于管理员命令）
-  const sendAndDelete = async (chatId, text, extraOptions = {}) => {
-    const res = await sendMessage({ chat_id: chatId, text, ...extraOptions });
+  // 辅助函数：发送回复并自动删除命令和回复（引用命令消息）
+  const sendAndDelete = async (replyText, extraOptions = {}) => {
+    const sendOptions = {
+      chat_id: chatId,
+      text: replyText,
+      reply_to_message_id: commandMsgId,
+      ...extraOptions
+    };
+    if (threadId) sendOptions.message_thread_id = threadId;
+    const res = await sendMessage(sendOptions);
     if (res && res.ok && res.result && event) {
       scheduleDeletion(chatId, [commandMsgId, res.result.message_id], 3000, event);
     }
@@ -1345,7 +1359,7 @@ async function onMessage(message, event) {
                     "/unfraud - 移除骗子ID - [本地库] (仅管理员)\n" +
                     "/list - 查看骗子ID列表 - [本地库] (仅管理员)\n" +
                     "/blocklist - 查看屏蔽用户列表 - [本地库] (仅管理员)\n";
-      await sendAndDelete(chatId, helpMsg);
+      await sendAndDelete(helpMsg);
       return;
     } else if (command === '/mode') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
@@ -1355,80 +1369,80 @@ async function onMessage(message, event) {
         if (curMode === 'private') {
           const gid = await getGroupChatId();
           if (!gid) {
-            await sendAndDelete(chatId, '无法切换到群组模式：未设置群组ID。请先使用 /setgroup 设置群组ID或配置环境变量 GROUP_CHAT_ID。');
+            await sendAndDelete('无法切换到群组模式：未设置群组ID。请先使用 /setgroup 设置群组ID或配置环境变量 GROUP_CHAT_ID。');
             return;
           }
           await setCurrentMode('group');
-          await sendAndDelete(chatId, '已切换到群组模式。所有用户消息将转发到群组话题中。');
+          await sendAndDelete('已切换到群组模式。所有用户消息将转发到群组话题中。');
         } else {
           await setCurrentMode('private');
-          await sendAndDelete(chatId, '已切换到私聊模式。所有用户消息将私聊转发给管理员。');
+          await sendAndDelete('已切换到私聊模式。所有用户消息将私聊转发给管理员。');
         }
         return;
       } else if (newMode === 'group') {
         const gid = await getGroupChatId();
         if (!gid) {
-          await sendAndDelete(chatId, '请先设置群组ID（环境变量 GROUP_CHAT_ID 或使用 /setgroup 命令）。');
+          await sendAndDelete('请先设置群组ID（环境变量 GROUP_CHAT_ID 或使用 /setgroup 命令）。');
           return;
         }
         await setCurrentMode('group');
-        await sendAndDelete(chatId, '已切换到群组模式。所有用户消息将转发到群组话题中。');
+        await sendAndDelete('已切换到群组模式。所有用户消息将转发到群组话题中。');
       } else if (newMode === 'private') {
         await setCurrentMode('private');
-        await sendAndDelete(chatId, '已切换到私聊模式。所有用户消息将私聊转发给管理员。');
+        await sendAndDelete('已切换到私聊模式。所有用户消息将私聊转发给管理员。');
       } else {
-        await sendAndDelete(chatId, `当前模式: ${curMode}\n使用方法: /mode 或 /mode private 或 /mode group`);
+        await sendAndDelete(`当前模式: ${curMode}\n使用方法: /mode 或 /mode private 或 /mode group`);
       }
       return;
     } else if (command === '/setgroup') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       const newGroupId = args.trim();
       if (!newGroupId) {
-        await sendAndDelete(chatId, '使用方法: /setgroup 群组ID');
+        await sendAndDelete('使用方法: /setgroup 群组ID');
         return;
       }
       await setGroupChatId(newGroupId);
-      await sendAndDelete(chatId, `群组ID已设置为: ${newGroupId}（持久化保存）`);
+      await sendAndDelete(`群组ID已设置为: ${newGroupId}（持久化保存）`);
       return;
     } else if (command === '/del') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       const count = await clearTempKV();
-      await sendAndDelete(chatId, `已删除 ${count} 个临时数据。`);
+      await sendAndDelete(`已删除 ${count} 个临时数据。`);
       return;
     } else if (command === '/blocklist') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
-      await listBlockedUsers(event, commandMsgId);
+      await listBlockedUsers(event, commandMsgId, chatId, threadId);
       return;
     } else if (command === '/unblock') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       if (message.reply_to_message) {
-        await handleUnBlock(message, event, commandMsgId);
+        await handleUnBlock(message, event, commandMsgId, chatId, threadId);
         return;
       }
       if (args) {
         const index = parseInt(args.split(' ')[0], 10);
         if (!isNaN(index)) {
-          await unblockByIndex(index, event, commandMsgId);
+          await unblockByIndex(index, event, commandMsgId, chatId, threadId);
           return;
         } else {
-          await sendAndDelete(chatId, '无效的序号。');
+          await sendAndDelete('无效的序号。');
           return;
         }
       }
-      await sendAndDelete(chatId, '使用方法: 请【回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取');
+      await sendAndDelete('使用方法: 请【回复某条消息并输入 /unblock 】 或 【使用 /unblock 屏蔽序号 】来解除屏蔽用户。\n 屏蔽序号可以通过 /blocklist 获取');
       return;
     } else if (command === '/list') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       const fraudList = await getLocalFraudList();
       if (fraudList.length === 0) {
-        await sendAndDelete(chatId, '本地没有骗子ID。');
+        await sendAndDelete('本地没有骗子ID。');
       } else {
         const fraudListText = await Promise.all(fraudList.map(async uid => {
           const userInfo = await getUserInfo(uid);
           const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : '未知';
           return `UID: ${uid}, 昵称: ${nickname}`;
         }));
-        await sendAndDelete(chatId, `本地骗子ID列表:\n${fraudListText.join('\n')}`);
+        await sendAndDelete(`本地骗子ID列表:\n${fraudListText.join('\n')}`);
       }
       return;
     } else if (command === '/search') {
@@ -1440,14 +1454,14 @@ async function onMessage(message, event) {
           const userInfo = await getChat(guestChatId);
           if (userInfo) {
             const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
-            await sendAndDelete(chatId, `UID: ${guestChatId}, 昵称: ${nickname}`);
+            await sendAndDelete(`UID: ${guestChatId}, 昵称: ${nickname}`);
             return;
           } else {
-            await sendAndDelete(chatId, `找不到 UID: ${guestChatId} 的详细信息`);
+            await sendAndDelete(`找不到 UID: ${guestChatId} 的详细信息`);
             return;
           }
         } else {
-          await sendAndDelete(chatId, '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
+          await sendAndDelete('无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
           return;
         }
       }
@@ -1456,14 +1470,14 @@ async function onMessage(message, event) {
         const userInfo = await getChat(searchId);
         if (userInfo) {
           const nickname = `${userInfo.first_name} ${userInfo.last_name || ''}`.trim();
-          await sendAndDelete(chatId, `UID: ${searchId}, 昵称: ${nickname}`);
+          await sendAndDelete(`UID: ${searchId}, 昵称: ${nickname}`);
           return;
         } else {
-          await sendAndDelete(chatId, `无法找到 UID: ${searchId} 的用户信息`);
+          await sendAndDelete(`无法找到 UID: ${searchId} 的用户信息`);
           return;
         }
       } else {
-        await sendAndDelete(chatId, '使用方法: 请回复某条消息并输入 /search，或 /search 用户UID');
+        await sendAndDelete('使用方法: 请回复某条消息并输入 /search，或 /search 用户UID');
         return;
       }
     } else if (command === '/fraud') {
@@ -1476,14 +1490,14 @@ async function onMessage(message, event) {
           const list = await getLocalFraudList();
           if (!list.includes(idStr)) {
             await addLocalFraud(idStr);
-            await sendAndDelete(chatId, `已添加骗子ID: ${idStr}`);
+            await sendAndDelete(`已添加骗子ID: ${idStr}`);
             return;
           } else {
-            await sendAndDelete(chatId, `骗子ID ${idStr} 已存在`);
+            await sendAndDelete(`骗子ID ${idStr} 已存在`);
             return;
           }
         } else {
-          await sendAndDelete(chatId, '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
+          await sendAndDelete('无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
           return;
         }
       }
@@ -1492,14 +1506,14 @@ async function onMessage(message, event) {
         const list = await getLocalFraudList();
         if (!list.includes(fraudId)) {
           await addLocalFraud(fraudId);
-          await sendAndDelete(chatId, `已添加骗子ID: ${fraudId}`);
+          await sendAndDelete(`已添加骗子ID: ${fraudId}`);
           return;
         } else {
-          await sendAndDelete(chatId, `骗子ID: ${fraudId} 已存在`);
+          await sendAndDelete(`骗子ID: ${fraudId} 已存在`);
           return;
         }
       } else {
-        await sendAndDelete(chatId, '使用方法: 请回复某条消息并输入 /fraud，或 /fraud 用户UID');
+        await sendAndDelete('使用方法: 请回复某条消息并输入 /fraud，或 /fraud 用户UID');
         return;
       }
     } else if (command === '/unfraud') {
@@ -1513,14 +1527,14 @@ async function onMessage(message, event) {
           const idx = list.indexOf(idStr);
           if (idx > -1) {
             await removeLocalFraud(idStr);
-            await sendAndDelete(chatId, `已移除骗子ID: ${idStr}`);
+            await sendAndDelete(`已移除骗子ID: ${idStr}`);
             return;
           } else {
-            await sendAndDelete(chatId, `骗子ID ${idStr} 不在本地列表中`);
+            await sendAndDelete(`骗子ID ${idStr} 不在本地列表中`);
             return;
           }
         } else {
-          await sendAndDelete(chatId, '无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
+          await sendAndDelete('无法从该回复中找到对应用户（请确认回复的是管理员收到的转发消息）。');
           return;
         }
       }
@@ -1530,32 +1544,32 @@ async function onMessage(message, event) {
         const index = list.indexOf(fraudId);
         if (index > -1) {
           await removeLocalFraud(fraudId);
-          await sendAndDelete(chatId, `已移除骗子ID: ${fraudId}`);
+          await sendAndDelete(`已移除骗子ID: ${fraudId}`);
           return;
         } else {
-          await sendAndDelete(chatId, `骗子ID: ${fraudId} 不在本地列表中`);
+          await sendAndDelete(`骗子ID: ${fraudId} 不在本地列表中`);
           return;
         }
       } else {
-        await sendAndDelete(chatId, '使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID');
+        await sendAndDelete('使用方法: 请回复某条消息并输入 /unfraud，或 /unfraud 用户UID');
         return;
       }
     } else if (command === '/block') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       if (message.reply_to_message) {
-        await handleBlock(message, event, commandMsgId);
+        await handleBlock(message, event, commandMsgId, chatId, threadId);
         return;
       } else {
-        await sendAndDelete(chatId, '使用方法: 请回复某条消息并输入 /block 来屏蔽用户。');
+        await sendAndDelete('使用方法: 请回复某条消息并输入 /block 来屏蔽用户。');
         return;
       }
     } else if (command === '/checkblock') {
       if (!(await requireAdmin(message, event, commandMsgId))) return;
       if (message.reply_to_message) {
-        await checkBlock(message, event, commandMsgId);
+        await checkBlock(message, event, commandMsgId, chatId, threadId);
         return;
       } else {
-        await sendAndDelete(chatId, '使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。');
+        await sendAndDelete('使用方法: 请回复某条消息并输入 /checkblock 来检查用户是否被屏蔽。');
         return;
       }
     }
@@ -1722,70 +1736,108 @@ async function handleGuestMessage(message) {
   }
 }
 
-async function handleBlock(message, event, commandMsgId) {
+// 以下辅助函数用于处理带自动删除的管理员命令（引用命令消息）
+async function handleBlock(message, event, commandMsgId, chatId, threadId) {
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   if (String(guestChatId) === ADMIN_UID) {
-    const sent = await sendMessage({ chat_id: ADMIN_UID, text: '不能屏蔽自己' });
+    const sendOptions = {
+      chat_id: chatId,
+      text: '不能屏蔽自己',
+      reply_to_message_id: commandMsgId
+    };
+    if (threadId) sendOptions.message_thread_id = threadId;
+    const sent = await sendMessage(sendOptions);
     if (sent && sent.ok && sent.result && event) {
-      scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+      scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
     }
     return;
   }
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
   await blockUser(guestChatId);
-  const sent = await sendMessage({ chat_id: ADMIN_UID, text: `用户 ${nickname} 已被屏蔽` });
+  const sendOptions = {
+    chat_id: chatId,
+    text: `用户 ${nickname} 已被屏蔽`,
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+  const sent = await sendMessage(sendOptions);
   if (sent && sent.ok && sent.result && event) {
-    scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+    scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
   }
 }
 
-async function handleUnBlock(message, event, commandMsgId) {
+async function handleUnBlock(message, event, commandMsgId, chatId, threadId) {
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
   await unblockUser(guestChatId);
-  const sent = await sendMessage({ chat_id: ADMIN_UID, text: `用户 ${nickname} 已解除屏蔽` });
+  const sendOptions = {
+    chat_id: chatId,
+    text: `用户 ${nickname} 已解除屏蔽`,
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+  const sent = await sendMessage(sendOptions);
   if (sent && sent.ok && sent.result && event) {
-    scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+    scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
   }
 }
 
-async function checkBlock(message, event, commandMsgId) {
+async function checkBlock(message, event, commandMsgId, chatId, threadId) {
   const guestChatId = await nfd.get('msg-map-' + message.reply_to_message.message_id, { type: "json" });
   const blocked = await isUserBlocked(guestChatId);
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
-  const sent = await sendMessage({ chat_id: ADMIN_UID, text: `用户 ${nickname}${blocked ? ' 已被屏蔽' : ' 未被屏蔽'}` });
+  const sendOptions = {
+    chat_id: chatId,
+    text: `用户 ${nickname}${blocked ? ' 已被屏蔽' : ' 未被屏蔽'}`,
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+  const sent = await sendMessage(sendOptions);
   if (sent && sent.ok && sent.result && event) {
-    scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+    scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
   }
 }
 
-async function listBlockedUsers(event, commandMsgId) {
+async function listBlockedUsers(event, commandMsgId, chatId, threadId) {
   const blockedUsers = await getBlockedUsers();
-  let sent;
+  let text;
   if (blockedUsers.length === 0) {
-    sent = await sendMessage({ chat_id: ADMIN_UID, text: '没有被屏蔽的用户。' });
+    text = '没有被屏蔽的用户。';
   } else {
     const blockedListText = await Promise.all(blockedUsers.map(async (uid, index) => {
       const userInfo = await getUserInfo(uid);
       const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : '未知';
       return `${index + 1}. UID: ${uid}, 昵称: ${nickname}`;
     }));
-    sent = await sendMessage({ chat_id: ADMIN_UID, text: `被屏蔽的用户列表:\n${blockedListText.join('\n')}` });
+    text = `被屏蔽的用户列表:\n${blockedListText.join('\n')}`;
   }
+  const sendOptions = {
+    chat_id: chatId,
+    text: text,
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+  const sent = await sendMessage(sendOptions);
   if (sent && sent.ok && sent.result && event) {
-    scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+    scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
   }
 }
 
-async function unblockByIndex(index, event, commandMsgId) {
+async function unblockByIndex(index, event, commandMsgId, chatId, threadId) {
   const blockedUsers = await getBlockedUsers();
   if (index < 1 || index > blockedUsers.length) {
-    const sent = await sendMessage({ chat_id: ADMIN_UID, text: '无效的序号。' });
+    const sendOptions = {
+      chat_id: chatId,
+      text: '无效的序号。',
+      reply_to_message_id: commandMsgId
+    };
+    if (threadId) sendOptions.message_thread_id = threadId;
+    const sent = await sendMessage(sendOptions);
     if (sent && sent.ok && sent.result && event) {
-      scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+      scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
     }
     return;
   }
@@ -1793,9 +1845,15 @@ async function unblockByIndex(index, event, commandMsgId) {
   await unblockUser(guestChatId);
   const userInfo = await getUserInfo(guestChatId);
   const nickname = userInfo ? `${userInfo.first_name} ${userInfo.last_name || ''}`.trim() : `UID:${guestChatId}`;
-  const sent = await sendMessage({ chat_id: ADMIN_UID, text: `用户 ${nickname} 已解除屏蔽` });
+  const sendOptions = {
+    chat_id: chatId,
+    text: `用户 ${nickname} 已解除屏蔽`,
+    reply_to_message_id: commandMsgId
+  };
+  if (threadId) sendOptions.message_thread_id = threadId;
+  const sent = await sendMessage(sendOptions);
   if (sent && sent.ok && sent.result && event) {
-    scheduleDeletion(ADMIN_UID, [commandMsgId, sent.result.message_id], 3000, event);
+    scheduleDeletion(chatId, [commandMsgId, sent.result.message_id], 3000, event);
   }
 }
 
