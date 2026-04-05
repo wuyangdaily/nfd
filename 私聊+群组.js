@@ -86,7 +86,6 @@ function escapeMarkdown(text) {
   return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
 }
 
-// 判断是否为管理员
 function isAdmin(userId) {
   return String(userId) === ADMIN_UID;
 }
@@ -178,6 +177,56 @@ async function editMessageCaption(msg = {}) {
   }
 }
 
+// ========== 支持媒体替换和内联键盘编辑 ==========
+async function editMessageMedia(msg = {}) {
+  try {
+    const res = await requestTelegram('editMessageMedia', makeReqBody(msg));
+    console.log('[editMessageMedia] request ->', JSON.stringify(msg), ' response ->', JSON.stringify(res));
+    return res;
+  } catch (err) {
+    console.error('[editMessageMedia] error', err, 'msg=', JSON.stringify(msg));
+    if (err && err.description && err.description.includes('message is not modified')) {
+      return { ok: true };
+    }
+    throw err;
+  }
+}
+
+async function editMessageReplyMarkup(msg = {}) {
+  try {
+    const res = await requestTelegram('editMessageReplyMarkup', makeReqBody(msg));
+    console.log('[editMessageReplyMarkup] request ->', JSON.stringify(msg), ' response ->', JSON.stringify(res));
+    return res;
+  } catch (err) {
+    console.error('[editMessageReplyMarkup] error', err, 'msg=', JSON.stringify(msg));
+    if (err && err.description && err.description.includes('message is not modified')) {
+      return { ok: true };
+    }
+    throw err;
+  }
+}
+
+// 辅助函数：从消息中提取媒体信息
+function extractMediaFromMessage(msg) {
+  if (msg.photo) {
+    const largest = msg.photo.reduce((a, b) => (a.file_size > b.file_size ? a : b), msg.photo[0]);
+    return { type: 'photo', file_id: largest.file_id };
+  }
+  if (msg.video) {
+    return { type: 'video', file_id: msg.video.file_id };
+  }
+  if (msg.animation) {
+    return { type: 'animation', file_id: msg.animation.file_id };
+  }
+  if (msg.audio) {
+    return { type: 'audio', file_id: msg.audio.file_id };
+  }
+  if (msg.document) {
+    return { type: 'document', file_id: msg.document.file_id };
+  }
+  return null;
+}
+
 function generateKeyboard(options) {
   return {
     reply_markup: {
@@ -224,13 +273,19 @@ function generateAdminCommandKeyboard(uid, nicknamePlain, mode = 'private') {
 }
 
 // -------------------- 消息映射存储 --------------------
-async function saveMessageMapping(sourceChatId, sourceMsgId, targetChatId, targetMsgId, msgType = 'text') {
+async function saveMessageMapping(sourceChatId, sourceMsgId, targetChatId, targetMsgId, msgType = 'text', mediaType = null, hasReplyMarkup = false) {
   const key = `msg_map_${sourceChatId}_${sourceMsgId}`;
-  const data = { target_chat_id: targetChatId, target_message_id: targetMsgId, type: msgType };
+  const data = {
+    target_chat_id: targetChatId,
+    target_message_id: targetMsgId,
+    type: msgType,
+    media_type: mediaType,
+    has_reply_markup: hasReplyMarkup
+  };
   await putWithTTL(key, JSON.stringify(data));
   const reverseKey = `msg_map_rev_${targetChatId}_${targetMsgId}`;
-  await putWithTTL(reverseKey, JSON.stringify({ source_chat_id: sourceChatId, source_message_id: sourceMsgId, type: msgType }));
-  console.log(`[映射保存] ${sourceChatId}:${sourceMsgId} -> ${targetChatId}:${targetMsgId} (type: ${msgType})`);
+  await putWithTTL(reverseKey, JSON.stringify({ source_chat_id: sourceChatId, source_message_id: sourceMsgId, type: msgType, media_type: mediaType }));
+  console.log(`[映射保存] ${sourceChatId}:${sourceMsgId} -> ${targetChatId}:${targetMsgId} (type: ${msgType}, media: ${mediaType})`);
 }
 
 async function getTargetMessage(sourceChatId, sourceMsgId) {
@@ -323,7 +378,6 @@ async function removeLocalFraud(userId) {
 // ---------- 获取当前北京时间字符串 (YYYY-MM-DD HH:MM:SS) ----------
 function getBeijingTimeString() {
   const now = new Date();
-  // 转换为北京时间（UTC+8）
   const beijingTime = new Date(now.getTime() + 8 * 3600 * 1000);
   const year = beijingTime.getUTCFullYear();
   const month = String(beijingTime.getUTCMonth() + 1).padStart(2, '0');
@@ -334,9 +388,7 @@ function getBeijingTimeString() {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
-// ---------- 将北京时间字符串转换为毫秒时间戳 ----------
 function beijingStringToTimestamp(beijingStr) {
-  // 格式: "YYYY-MM-DD HH:MM:SS"
   const match = beijingStr.match(/(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
   if (!match) return null;
   const year = parseInt(match[1], 10);
@@ -345,11 +397,10 @@ function beijingStringToTimestamp(beijingStr) {
   const hour = parseInt(match[4], 10);
   const minute = parseInt(match[5], 10);
   const second = parseInt(match[6], 10);
-  // 北京时间 = UTC+8，所以转换为 UTC 时间戳需要减去 8 小时
   return Date.UTC(year, month, day, hour - 8, minute, second);
 }
 
-// 远程骗子库缓存（存储北京时间字符串）
+// 远程骗子库缓存
 async function getFraudSet() {
   const now = Date.now();
   let lastUpdateStr = await nfd.get(FRAUD_CACHE_TIME_KV_KEY);
@@ -375,7 +426,6 @@ async function getFraudSet() {
       const text = await response.text();
       const lines = text.split('\n').filter(v => v.trim().length > 0);
       await putWithTTL(FRAUD_CACHE_KV_KEY, JSON.stringify(lines));
-      // 存储北京时间字符串
       const beijingTimeStr = getBeijingTimeString();
       await putWithTTL(FRAUD_CACHE_TIME_KV_KEY, beijingTimeStr);
       console.log(`[getFraudSet] 已更新骗子库，共 ${lines.length} 条记录，更新时间: ${beijingTimeStr}`);
@@ -454,7 +504,7 @@ async function getRecentChatTargets() {
   return recentChatTargets.map(id => id.toString());
 }
 
-// 当前聊天目标（使用 KV TTL）
+// 当前聊天目标
 async function getCurrentChatTarget() {
   const data = await nfd.get('currentChatTarget', { type: 'json' });
   return data ? data.target : null;
@@ -508,7 +558,6 @@ async function setGroupChatId(gid) {
   await putWithTTL(GROUP_CHAT_ID_KV_KEY, gid);
 }
 
-// 确保配置加载完成（在 handleWebhook 开始时调用）
 let configLoadedPromise = null;
 async function ensureConfigLoaded() {
   if (!configLoadedPromise) {
@@ -548,12 +597,10 @@ async function ensureUserTopic(userId, displayName) {
   return topicId;
 }
 
-// 在发送管理按钮时，如果是骗子，添加警告
 async function sendAdminButtonsInTopic(topicId, userId, nicknamePlain, nicknameEsc) {
   const groupChatId = await getGroupChatId();
   if (!groupChatId) return;
   let text = `👤: [*${nicknameEsc}*](tg://user?id=${userId})\n🆔: ${userId}`;
-  // 检查是否是骗子
   if (await isFraud(userId)) {
     text += `\n\n⚠️ *请注意，该用户是骗子！*`;
   }
@@ -571,7 +618,6 @@ async function sendAdminButtonsInTopic(topicId, userId, nicknamePlain, nicknameE
   }
 }
 
-// 转发用户消息到话题
 async function forwardUserMessageToTopic(userId, topicId, message) {
   const groupChatId = await getGroupChatId();
   if (!groupChatId) return;
@@ -583,8 +629,9 @@ async function forwardUserMessageToTopic(userId, topicId, message) {
   });
   if (copyReq.ok && copyReq.result) {
     const copiedMsgId = copyReq.result.message_id;
+    const mediaInfo = extractMediaFromMessage(message);
     const msgType = message.text ? 'text' : (message.caption ? 'caption' : 'media');
-    await saveMessageMapping(userId, message.message_id, groupChatId, copiedMsgId, msgType);
+    await saveMessageMapping(userId, message.message_id, groupChatId, copiedMsgId, msgType, mediaInfo ? mediaInfo.type : null, !!message.reply_markup);
     console.log(`[映射保存] 用户消息 ${message.message_id} 已复制到话题 ${copiedMsgId}`);
   } else {
     console.error('[转发] 复制消息失败:', copyReq);
@@ -1001,7 +1048,7 @@ async function setVerified(chatId) {
   await putWithTTL('verified-' + chatId, JSON.stringify(Date.now()));
 }
 
-// -------------------- 编辑消息处理 --------------------
+// ================= 核心：增强的编辑消息处理 =================
 async function onEditedMessage(message, event) {
   try { console.log('[onEditedMessage] raw message:', JSON.stringify(message)); } catch(e){}
 
@@ -1009,36 +1056,103 @@ async function onEditedMessage(message, event) {
   const chatId = message.chat.id.toString();
   const isAdminUser = isAdmin(fromId);
 
-  // 私聊中的编辑消息，或群组中管理员的编辑消息
   if (message.chat.type !== 'private' && !isAdminUser) {
     console.log('[忽略] 非私聊且非管理员的编辑消息，来自', fromId);
     return;
   }
 
-  // 查找映射（私聊编辑或群组管理员的回复编辑）
   const target = await getTargetMessage(chatId, message.message_id);
   if (!target) {
     console.log('[编辑] 未找到映射，忽略');
     return;
   }
 
-  console.log(`[编辑] 找到映射，目标聊天 ${target.target_chat_id}，目标消息 ${target.target_message_id}`);
+  const targetChatId = target.target_chat_id;
+  const targetMsgId = target.target_message_id;
+  const originalType = target.type;
+  const originalMediaType = target.media_type;
 
-  if (message.text !== undefined) {
-    await editMessageText({
-      chat_id: target.target_chat_id,
-      message_id: target.target_message_id,
-      text: message.text,
-      parse_mode: message.parse_mode || undefined
-    }).catch(err => console.error('[编辑] 编辑文本失败', err));
-  } else if (message.caption !== undefined) {
-    await editMessageCaption({
-      chat_id: target.target_chat_id,
-      message_id: target.target_message_id,
-      caption: message.caption,
-      parse_mode: message.parse_mode || undefined
-    }).catch(err => console.error('[编辑] 编辑 caption 失败', err));
+  // 1. 优先处理内联键盘的编辑
+  if (message.reply_markup) {
+    await editMessageReplyMarkup({
+      chat_id: targetChatId,
+      message_id: targetMsgId,
+      reply_markup: message.reply_markup
+    }).catch(err => console.error('[编辑] 编辑键盘失败', err));
+    return;
   }
+
+  // 2. 处理文本编辑
+  if (message.text !== undefined && message.text !== null) {
+    if (originalType === 'text') {
+      await editMessageText({
+        chat_id: targetChatId,
+        message_id: targetMsgId,
+        text: message.text,
+        parse_mode: message.parse_mode || undefined,
+        entities: message.entities
+      }).catch(err => console.error('[编辑] 编辑文本失败', err));
+    } else {
+      console.warn('[编辑] 无法将媒体消息编辑为纯文本，忽略');
+    }
+    return;
+  }
+
+  // 3. 处理媒体文件替换
+  const newMedia = extractMediaFromMessage(message);
+  if (newMedia && newMedia.file_id) {
+    // 向后兼容：如果旧映射没有 media_type，跳过媒体替换（仅更新 caption 或忽略）
+    if (originalMediaType === undefined) {
+      console.warn('[编辑] 旧映射缺少 media_type，跳过媒体替换');
+      // 但如果同时修改了 caption，仍然可以更新 caption
+      if (message.caption !== undefined && (originalType === 'caption' || originalType === 'media')) {
+        await editMessageCaption({
+          chat_id: targetChatId,
+          message_id: targetMsgId,
+          caption: message.caption,
+          parse_mode: message.parse_mode || undefined,
+          show_caption_above_media: message.show_caption_above_media
+        }).catch(err => console.error('[编辑] 编辑 caption 失败', err));
+      }
+      return;
+    }
+    // 类型不匹配时警告但仍尝试
+    if (originalMediaType && newMedia.type !== originalMediaType) {
+      console.warn(`[编辑] 媒体类型不兼容: 原 ${originalMediaType} -> 新 ${newMedia.type}，仍尝试编辑`);
+    }
+    const inputMedia = {
+      type: newMedia.type,
+      media: newMedia.file_id
+    };
+    if (message.caption) {
+      inputMedia.caption = message.caption;
+      inputMedia.parse_mode = message.parse_mode || undefined;
+    }
+    await editMessageMedia({
+      chat_id: targetChatId,
+      message_id: targetMsgId,
+      media: inputMedia
+    }).catch(err => console.error('[编辑] 替换媒体失败', err));
+    return;
+  }
+
+  // 4. 处理仅 caption 编辑
+  if (message.caption !== undefined && message.caption !== null) {
+    if (originalType === 'caption' || originalType === 'media') {
+      await editMessageCaption({
+        chat_id: targetChatId,
+        message_id: targetMsgId,
+        caption: message.caption,
+        parse_mode: message.parse_mode || undefined,
+        show_caption_above_media: message.show_caption_above_media
+      }).catch(err => console.error('[编辑] 编辑 caption 失败', err));
+    } else {
+      console.warn('[编辑] 纯文本消息无法编辑 caption');
+    }
+    return;
+  }
+
+  console.log('[编辑] 无支持的编辑内容');
 }
 
 // -------------------- 消息处理 --------------------
@@ -1085,7 +1199,8 @@ async function onMessage(message, event) {
           sendRes = await sendMessage({ chat_id: targetUserId, text: message.text });
           console.log('[群组回复] 发送文本消息给用户', targetUserId, '结果:', sendRes);
           if (sendRes.ok && sendRes.result) {
-            await saveMessageMapping(chatId, message.message_id, targetUserId, sendRes.result.message_id, 'text');
+            const mediaInfo = extractMediaFromMessage(message);
+            await saveMessageMapping(chatId, message.message_id, targetUserId, sendRes.result.message_id, 'text', null, !!message.reply_markup);
           }
         } else {
           sendRes = await copyMessage({
@@ -1095,8 +1210,9 @@ async function onMessage(message, event) {
           });
           console.log('[群组回复] 复制媒体消息给用户', targetUserId, '结果:', sendRes);
           if (sendRes.ok && sendRes.result) {
+            const mediaInfo = extractMediaFromMessage(message);
             const msgType = message.caption ? 'caption' : 'media';
-            await saveMessageMapping(chatId, message.message_id, targetUserId, sendRes.result.message_id, msgType);
+            await saveMessageMapping(chatId, message.message_id, targetUserId, sendRes.result.message_id, msgType, mediaInfo ? mediaInfo.type : null, !!message.reply_markup);
           }
         }
         if (sendRes && sendRes.ok) {
@@ -1410,7 +1526,8 @@ async function onMessage(message, event) {
             text: message.text,
           });
           if (sendRes.ok && sendRes.result) {
-            await saveMessageMapping(chatId, message.message_id, guestChatId, sendRes.result.message_id, 'text');
+            const mediaInfo = extractMediaFromMessage(message);
+            await saveMessageMapping(chatId, message.message_id, guestChatId, sendRes.result.message_id, 'text', null, !!message.reply_markup);
           }
         } else {
           console.log("Copying media message:", message.message_id);
@@ -1420,8 +1537,9 @@ async function onMessage(message, event) {
             message_id: message.message_id,
           });
           if (copyRes.ok && copyRes.result) {
+            const mediaInfo = extractMediaFromMessage(message);
             const msgType = message.caption ? 'caption' : 'media';
-            await saveMessageMapping(chatId, message.message_id, guestChatId, copyRes.result.message_id, msgType);
+            await saveMessageMapping(chatId, message.message_id, guestChatId, copyRes.result.message_id, msgType, mediaInfo ? mediaInfo.type : null, !!message.reply_markup);
           }
         }
         await nfd.delete('msg-map-' + repliedMsgId);
@@ -1443,7 +1561,8 @@ async function onMessage(message, event) {
           text: message.text,
         });
         if (sendRes.ok && sendRes.result) {
-          await saveMessageMapping(chatId, message.message_id, currentTarget, sendRes.result.message_id, 'text');
+          const mediaInfo = extractMediaFromMessage(message);
+          await saveMessageMapping(chatId, message.message_id, currentTarget, sendRes.result.message_id, 'text', null, !!message.reply_markup);
         }
       } else {
         console.log("Copying media message:", message.message_id);
@@ -1453,8 +1572,9 @@ async function onMessage(message, event) {
           message_id: message.message_id,
         });
         if (copyRes.ok && copyRes.result) {
+          const mediaInfo = extractMediaFromMessage(message);
           const msgType = message.caption ? 'caption' : 'media';
-          await saveMessageMapping(chatId, message.message_id, currentTarget, copyRes.result.message_id, msgType);
+          await saveMessageMapping(chatId, message.message_id, currentTarget, copyRes.result.message_id, msgType, mediaInfo ? mediaInfo.type : null, !!message.reply_markup);
         }
       }
     }
@@ -1466,9 +1586,8 @@ async function onMessage(message, event) {
 }
 
 async function handleGuestMessage(message) {
-  const userId = message.from.id; // 用户ID
+  const userId = message.from.id;
 
-  // 检查屏蔽状态
   if (await isUserBlocked(userId)) {
     return sendMessage({
       chat_id: userId,
@@ -1493,7 +1612,6 @@ async function handleGuestMessage(message) {
     return;
   }
 
-  // 根据模式转发消息
   const currentMode = await getCurrentMode();
   const groupChatId = await getGroupChatId();
   if (currentMode === 'group' && groupChatId) {
@@ -1513,7 +1631,6 @@ async function handleGuestMessage(message) {
     await forwardUserMessageToTopic(userId, topicId, message);
     return;
   } else {
-    // 私聊模式：使用 copyMessage 转发，并保存映射
     const copyReq = await copyMessage({
       chat_id: ADMIN_UID,
       from_chat_id: userId,
@@ -1521,8 +1638,9 @@ async function handleGuestMessage(message) {
     });
 
     if (copyReq.ok && copyReq.result) {
+      const mediaInfo = extractMediaFromMessage(message);
       const msgType = message.text ? 'text' : (message.caption ? 'caption' : 'media');
-      await saveMessageMapping(userId, message.message_id, ADMIN_UID, copyReq.result.message_id, msgType);
+      await saveMessageMapping(userId, message.message_id, ADMIN_UID, copyReq.result.message_id, msgType, mediaInfo ? mediaInfo.type : null, !!message.reply_markup);
       await putWithTTL('msg-map-' + copyReq.result.message_id, userId);
 
       const currentTarget = await getCurrentChatTarget();
@@ -1768,7 +1886,7 @@ async function onCallbackQuery(callbackQuery, event) {
               if (pending.text) {
                 const sendRes = await sendMessage({ chat_id: selectedChatId, text: pending.text });
                 if (sendRes.ok && sendRes.result) {
-                  await saveMessageMapping(ADMIN_UID, pending.message_id, selectedChatId, sendRes.result.message_id, 'text');
+                  await saveMessageMapping(ADMIN_UID, pending.message_id, selectedChatId, sendRes.result.message_id, 'text', null, false);
                 }
               } else if (pending.hasMedia) {
                 await sendMessage({ chat_id: ADMIN_UID, text: '待转发的媒体消息需要您手动重新发送。' });
